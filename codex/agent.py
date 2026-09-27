@@ -80,10 +80,15 @@ class Agent:
                 result = {"error": str(exc)}
 
             self.messages.append({"role": "assistant", "content": response})
+            # Keep tool results provider-compatible: plain chat-completions
+            # endpoints do not all implement the newer tool_call protocol.
             self.messages.append({
-                "role": "tool",
-                "name": name,
-                "content": json.dumps(result, ensure_ascii=False, default=str),
+                "role": "user",
+                "content": (
+                    f"TOOL RESULT ({name}):\n"
+                    + json.dumps(result, ensure_ascii=False, default=str)
+                    + "\nContinue the task using this result."
+                ),
             })
 
         return "Batas langkah agent tercapai; sesi dihentikan sebelum loop berlanjut."

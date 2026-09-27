@@ -24,9 +24,12 @@ No third-party Python packages are required.
 
 ## Startup
 
+API key sekarang dibaca dengan input Termux-friendly: karakter yang diketik/ditempel tampil sebagai `*`, jadi ada feedback visual tanpa menampilkan nilai key. Backspace dan Enter didukung.
+
+
 ```text
 Base url: https://provider.example/v1
-api key: ********
+api key (ketik/tempel, tampil sebagai *): ********
 id model: your-model
 
 Verifikasi api: loading...
