@@ -2,12 +2,14 @@ from __future__ import annotations
 import os
 import shutil
 import sys
+import subprocess
+import base64
 import termios
 import tty
 from .config import Config, normalize_base_url
 from .tools import Workspace
 from .project import ProjectIndex
-from .renderer import render_markdown
+from .renderer import render_markdown, LiveMarkdownRenderer, extract_code_blocks
 
 RED = "\033[91m"
 CYAN = "\033[96m"
@@ -168,9 +170,23 @@ def _change_workspace(agent, config, registry, raw_path: str):
     })
     return f"Workspace aktif: {candidate}"
 
+def copy_text_to_clipboard(text: str) -> str:
+    """Copy text using Termux API when available, otherwise OSC52."""
+    exe = shutil.which("termux-clipboard-set")
+    if exe:
+        proc = subprocess.run([exe], input=text, text=True, capture_output=True, timeout=10)
+        if proc.returncode == 0:
+            return "Code berhasil disalin ke clipboard Termux."
+    encoded = base64.b64encode(text.encode("utf-8")).decode("ascii")
+    sys.stdout.write(f"\033]52;c;{encoded}\a")
+    sys.stdout.flush()
+    return "Kode dikirim ke clipboard terminal via OSC52 (jika terminal mendukungnya)."
+
+
 def run_ui(agent, config, registry):
     clear()
     banner(config)
+    last_answer = ""
     while True:
         try:
             text = input(f"{RED}root@codex:~#{RESET} ").strip()
@@ -187,18 +203,35 @@ def run_ui(agent, config, registry):
         if text == "/pwd":
             print(f"Workspace: {registry.ws.root}\n")
             continue
+        if text.startswith("/copy"):
+            parts=text.split(maxsplit=1)
+            try: idx=int(parts[1]) if len(parts)>1 else 1
+            except ValueError: idx=1
+            blocks=extract_code_blocks(last_answer)
+            if not blocks or idx < 1 or idx > len(blocks):
+                print(f"{RED}Code block tidak ditemukan: {idx}{RESET}\n")
+                continue
+            print(copy_text_to_clipboard(blocks[idx-1]["code"]) + "\n")
+            continue
         if text.startswith("/cd"):
             target = text[3:].strip()
             print(_change_workspace(agent, config, registry, target) + "\n")
             continue
         try:
             print(f"{CYAN}root@ai-codex:~#{RESET}")
+            live = LiveMarkdownRenderer()
             streamed=[]
-            agent.stream_callback = lambda piece: (streamed.append(piece), print(piece, end='', flush=True))
-            answer = agent.run(text)
-            agent.stream_callback = None
+            def on_token(piece):
+                streamed.append(piece)
+                live.feed(piece)
+            agent.stream_callback = on_token
+            try:
+                answer = agent.run(text)
+            finally:
+                agent.stream_callback = None
+            last_answer = "".join(streamed) if streamed else answer
             if streamed:
-                print("\n")
+                live.finish(answer)
             else:
                 print(render_markdown(answer)); print()
         except Exception as exc:

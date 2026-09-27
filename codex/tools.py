@@ -246,6 +246,37 @@ class TodoStore:
             return self.items
         raise ToolError(f"Aksi todo tidak dikenal: {action}")
 
+
+
+def verify_project(ws: Workspace, command: str = "") -> dict[str, Any]:
+    """Run a project verification command, auto-detecting common test commands when omitted."""
+    root = ws.root
+    if command.strip():
+        cmd = command.strip()
+    elif (root / "pyproject.toml").exists() or (root / "pytest.ini").exists() or (root / "tests").is_dir():
+        cmd = "python -m pytest -q" if shutil.which("pytest") else "python -m unittest discover -v"
+    elif (root / "package.json").exists():
+        cmd = "npm test -- --runInBand"
+    elif (root / "build.gradle").exists() or (root / "gradlew").exists():
+        cmd = "./gradlew test" if (root / "gradlew").exists() else "gradle test"
+    elif (root / "Cargo.toml").exists():
+        cmd = "cargo test"
+    elif (root / "go.mod").exists():
+        cmd = "go test ./..."
+    else:
+        cmd = "python -m compileall -q ."
+    proc = subprocess.run(cmd, cwd=root, shell=True, capture_output=True, text=True, timeout=180)
+    return {"command": cmd, "returncode": proc.returncode, "ok": proc.returncode == 0,
+            "stdout": proc.stdout[-12000:], "stderr": proc.stderr[-12000:]}
+
+
+def project_diff(ws: Workspace) -> str:
+    """Return a readable working-tree diff, with a fallback for non-git projects."""
+    if not (ws.root / ".git").exists():
+        return "Not a Git repository; use read/write/patch results for file changes."
+    proc = subprocess.run(["git", "diff", "--", "."], cwd=ws.root, capture_output=True, text=True, timeout=60)
+    return proc.stdout or "(working tree has no unstaged diff)"
+
 class ToolRegistry:
     def __init__(self, workspace: str):
         self.ws = Workspace(workspace)
@@ -277,6 +308,9 @@ class ToolRegistry:
             {"name":"checkpoint","description":"Create, list, or restore a local project checkpoint.","parameters":{"action":"create|list|restore","name":"string","label":"string"}},
             {"name":"doctor","description":"Diagnose Codex, workspace, tools, and environment health.","parameters":{}},
             {"name":"background","description":"Run a safe read/analysis subtask in the background and inspect its status later.","parameters":{"action":"start|list|get","prompt":"string","job_id":"string"}},
+            {"name":"verify","description":"Run project tests/build/compile verification; auto-detect a suitable command when omitted.","parameters":{"command":"string"}},
+            {"name":"diff","description":"Show the current Git working-tree diff for review before reporting changes.","parameters":{}},
+            {"name":"goal","description":"Read or record the current project goal and acceptance notes in persistent memory.","parameters":{"action":"read|set","content":"string"}},
         ]
 
     def call(self, name: str, args: dict[str, Any], subagent: Callable[[str, str], str] | None = None) -> Any:
@@ -319,6 +353,19 @@ class ToolRegistry:
             raise ToolError("checkpoint action tidak dikenal")
         if name == "doctor":
             return doctor_run(str(self.ws.root), self.config, self)
+        if name == "verify":
+            return verify_project(self.ws, args.get("command", ""))
+        if name == "diff":
+            return project_diff(self.ws)
+        if name == "goal":
+            action=args.get("action", "read")
+            if action == "set":
+                content=args.get("content", "").strip()
+                if not content: raise ToolError("Goal tidak boleh kosong.")
+                self.memory.add("goal", content, {"workspace": str(self.ws.root)})
+                return {"saved": True, "goal": content}
+            rows=[r for r in self.memory.recent(50) if r.get("kind") == "goal"]
+            return rows[-8:]
         if name == "background":
             action=args.get("action","list")
             if action == "list": return self.jobs.list()
