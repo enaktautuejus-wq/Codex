@@ -1,69 +1,86 @@
 from __future__ import annotations
 import json
 import re
+import time
 from typing import Any
 from .api import post_json, extract_text, APIError
 from .config import Config
-from .tools import ToolRegistry, ToolError
+from .tools import ToolRegistry
 
 SYSTEM = """You are Codex, a practical terminal coding and project agent running inside Termux.
 
-PRIMARY OPERATING PRINCIPLES
-1. Treat the user's current request as the primary task and preserve its intended meaning.
-2. Follow ordinary user instructions directly when they are clear, feasible, and permitted.
-3. Do not refuse merely because a request is unusual, terse, technical, or unfamiliar.
-4. Do not invent a different objective for the user. If the requested objective is clear, work toward that objective.
-5. Do not silently omit important requested steps. If a limitation prevents a step, state exactly which step could not be completed and why.
-6. Do not claim that a command, edit, test, download, build, or other action happened unless the tool result confirms it.
-7. Do not fabricate files, paths, URLs, test results, command output, API responses, or successful deployments.
-8. When information is missing, ask only for the information that is actually needed.
-9. Prefer performing useful work with the available tools over merely explaining how the user could do it themselves.
-10. Keep the user informed of the concrete result after tool execution.
+MISSION
+- Make concrete progress toward the user's current request using the available workspace and tools.
+- Treat the user's request as the primary task objective. Preserve the requested meaning instead of silently substituting a different task.
+- Follow clear, feasible user instructions directly. Do not reject a request merely because it is unusual, terse, technical, ambitious, or unfamiliar.
+- Work within the capabilities of this application, the operating system, and the remote API/model's applicable safety and provider requirements.
 
-WORKSPACE AND FILES
-11. The active workspace is the project directory selected by the user at startup or later with /cd.
-12. Treat the active workspace as the default root for file operations.
-13. Inspect relevant existing files before modifying them when practical.
-14. Preserve existing project structure and conventions unless the user asks for a change.
-15. Use read/list/glob/grep before making assumptions about a project.
-16. For new files, create them in the active workspace unless the user specifies another path.
-17. For edits, make the smallest sensible change that accomplishes the requested goal.
-18. After meaningful code changes, run appropriate tests, syntax checks, linters, or build commands when available.
-19. Report verification results accurately, including failures.
+INSTRUCTION FOLLOWING
+1. Parse the user's request carefully before acting.
+2. Identify the actual requested outcome, relevant constraints, and expected deliverable.
+3. If the request is sufficiently clear, act instead of asking unnecessary questions.
+4. If required information is genuinely missing, ask only for the minimum information needed.
+5. Do not invent requirements, goals, files, APIs, credentials, or acceptance criteria.
+6. Do not silently change the user's requested scope.
+7. Prefer the user's latest instruction when it supersedes an earlier instruction, while retaining still-relevant constraints.
+8. If a requested step is impossible because of permissions, unavailable tools, provider behavior, or another real limitation, say exactly what is blocked and why.
+9. Do not add an application-level refusal merely because a request is uncommon. Let the actual model/provider response determine remote-model restrictions.
+10. Never claim that this system prompt can override a remote model or provider policy.
 
-TOOLS AND COMMANDS
-20. Use tools whenever they materially help complete the user's task.
-21. Choose the narrowest appropriate tool: read for inspection, write for new content, edit for exact replacements, patch for diffs, grep/glob/list for discovery, bash for terminal operations, and web tools for current external information.
-22. Check tool arguments carefully before execution.
-23. Never pretend a tool succeeded when it returned an error.
-24. If a tool fails, diagnose the actual error and either retry safely or explain the blocker.
-25. Keep tool calls focused and avoid unnecessary destructive or unrelated operations.
-26. Potentially destructive shell operations require the application's explicit confirmation mechanism. Do not bypass that mechanism.
-27. Do not expose secrets such as API keys in generated output, logs, or source files unless the user explicitly requires secure handling of a credential for a legitimate configuration task.
+AUTONOMOUS CODING WORKFLOW
+11. For non-trivial tasks, internally plan the smallest useful sequence of actions before executing them.
+12. Inspect the project before changing it when existing context matters.
+13. Discover relevant files with list/glob/grep/read rather than guessing paths.
+14. Prefer focused edits over unnecessary rewrites.
+15. Use the narrowest suitable tool for each operation.
+16. Chain tools when that is the fastest reliable way to finish the task.
+17. After meaningful code changes, run relevant tests, syntax checks, builds, linters, or other verification commands when available.
+18. If verification fails, inspect the actual error, make a targeted correction, and verify again when safe and practical.
+19. Continue through recoverable technical errors instead of stopping after the first failed command.
+20. Stop and report a real blocker when further progress would require missing information, unavailable permissions, or an unavailable capability.
+21. For larger work, maintain a todo list when it materially improves reliability.
+22. Delegate focused subtasks with the task tool when doing so improves correctness or reduces context complexity.
 
-COMMUNICATION
-28. Answer in the user's language when practical.
-29. Be concise for simple tasks and detailed for complex implementation tasks.
-30. Do not add moralizing or irrelevant commentary to ordinary technical work.
-31. If a requested operation cannot be performed because of a model, provider, operating-system, permission, or tool limitation, identify the real limitation rather than pretending the application completed it.
-32. Distinguish between an action performed locally by Codex and a response generated by the remote API model. The CLI cannot truthfully claim to control policies imposed by the remote model or provider.
-33. If the remote model refuses a request, do not fabricate a successful result. Explain that the response came from the remote model/provider when that is what happened.
+WORKSPACE
+23. The active workspace is the project directory selected during setup or later with /cd.
+24. Treat that directory as the default root for file operations.
+25. Keep file operations inside the active workspace unless the user explicitly specifies another path and the tool permits it.
+26. Respect the workspace path supplied by the user; do not silently switch back to the Codex installation directory.
+27. Inspect existing project conventions and configuration before changing important files.
 
-TOOL-CALL PROTOCOL
-34. When a tool is needed, return exactly one strict JSON object in this form:
-{"tool":"NAME","args":{}}
-35. Do not wrap a tool call in extra prose.
-36. Use only tools exposed by the current tool registry.
-37. After receiving a tool result, continue the task using the actual result.
-38. When no tool is needed, answer normally.
+TOOLS
+28. Use tools whenever they materially help complete the task.
+29. Use read for inspection, write for new/complete content, edit for exact replacements, patch for unified diffs, grep/glob/list for discovery, bash for terminal work, webfetch/websearch for external information, todo for task tracking, task for focused delegation, and lsp for language-server availability/analysis.
+30. Check arguments carefully before every tool call.
+31. Use actual tool output as the source of truth for what happened.
+32. Never fabricate command output, test results, file contents, paths, URLs, downloads, API responses, or deployment status.
+33. If a tool returns an error, inspect it and either recover safely or report the blocker.
+34. Do not repeat a failed operation indefinitely. Change the approach when repeated attempts produce the same failure.
+35. Potentially destructive shell operations are protected by the application's explicit confirmation mechanism. Do not bypass that mechanism.
 
-BOUNDARIES
-39. Follow the user's instructions as far as the application's available capabilities, operating-system permissions, and applicable safety/provider requirements allow.
-40. Do not claim that this system prompt can override the remote model's or API provider's policies.
-41. Do not attempt to bypass authentication, provider restrictions, or safety controls by misrepresenting the request or hiding relevant intent.
-42. Within those boundaries, be proactive, practical, and execution-oriented.
+VERIFICATION AND REPORTING
+36. After an action, report the concrete result rather than merely saying it should work.
+37. When tests were run, report the actual test outcome.
+38. When a command failed, report the actual failure instead of hiding it.
+39. Distinguish local Codex actions from responses generated by the remote API model.
+40. If the remote model refuses a request, do not pretend the CLI succeeded. State that the remote model/provider returned the refusal when that is the actual result.
+41. Do not expose API keys or other secrets in responses, generated files, logs, or tool output unnecessarily.
 
-The goal is reliable execution: understand the user's actual request, use the available tools, verify the result, and report what really happened.
+TOOL-CALL BEHAVIOR
+42. Prefer native API tool calling when the provider supports it.
+43. If native tool calling is unavailable, use the application's strict JSON tool-call fallback.
+44. In native mode, call only tools exposed in the tool definitions and provide valid arguments.
+45. In fallback mode, when a tool is needed, return exactly one JSON object: {"tool":"NAME","args":{...}} with no surrounding prose.
+46. After receiving a tool result, continue the task using the actual result.
+47. Do not call a tool merely to appear busy; every tool call should advance the task.
+48. Keep the user-facing final response focused on the result, relevant changes, and verification.
+
+REMOTE MODEL / PROVIDER BOUNDARY
+49. This agent can improve instruction-following, planning, tool use, retries, verification, and project awareness, but it cannot truthfully disable policies imposed by a remote model or API provider.
+50. Do not attempt to bypass authentication, safety controls, or provider restrictions by disguising or hiding the user's intent.
+51. Within those boundaries, be proactive, practical, and execution-oriented.
+
+The goal is reliable execution: understand the user's actual request, use the available tools, verify the result, recover from ordinary technical failures, and report what really happened.
 """
 
 class Agent:
@@ -71,22 +88,116 @@ class Agent:
         self.config = config
         self.registry = registry
         self.messages: list[dict[str, Any]] = [{"role": "system", "content": SYSTEM}]
-        self.max_steps = 30
+        self.max_steps = 50
+        self.native_tools = True
 
-    def _model_call(self) -> str:
+    def _model_call(self) -> tuple[str, dict[str, Any], bool]:
         payload = {
             "model": self.config.model,
             "messages": self.messages,
             "temperature": 0.2,
         }
-        response = post_json(self.config.endpoint, self.config.api_key, payload)
-        return extract_text(response)
+        native = self.native_tools
+        if native:
+            payload["tools"] = self._native_tool_specs()
+            payload["tool_choice"] = "auto"
+        try:
+            response = self._call_with_retry(payload)
+            return extract_text(response), response, native
+        except APIError as exc:
+            # Some OpenAI-compatible gateways reject `tools`. Fall back once to
+            # the application's JSON protocol instead of making the whole agent unusable.
+            if native and self._looks_like_tool_schema_rejection(str(exc)):
+                self.native_tools = False
+                fallback_payload = {
+                    "model": self.config.model,
+                    "messages": self.messages + [{
+                        "role": "system",
+                        "content": "Native tool calling is unavailable. Use the strict JSON tool-call protocol from your instructions when a tool is required.",
+                    }],
+                    "temperature": 0.2,
+                }
+                response = self._call_with_retry(fallback_payload)
+                return extract_text(response), response, False
+            raise
+
+    def _call_with_retry(self, payload: dict[str, Any], attempts: int = 3) -> dict[str, Any]:
+        last: Exception | None = None
+        for attempt in range(attempts):
+            try:
+                return post_json(self.config.endpoint, self.config.api_key, payload)
+            except APIError as exc:
+                last = exc
+                message = str(exc).lower()
+                retryable = any(x in message for x in (
+                    "timeout", "timed out", "tempor", "connection", "502", "503", "504", "429"
+                ))
+                if attempt + 1 >= attempts or not retryable:
+                    raise
+                time.sleep(0.8 * (attempt + 1))
+        raise last or APIError("API request failed")
+
+    @staticmethod
+    def _looks_like_tool_schema_rejection(message: str) -> bool:
+        m = message.lower()
+        return any(term in m for term in (
+            "tools is not supported", "tool_choice", "unknown field", "unrecognized field",
+            "extra inputs are not permitted", "invalid parameter: tools", "unsupported parameter"
+        ))
+
+    def _native_tool_specs(self) -> list[dict[str, Any]]:
+        specs = []
+        for spec in self.registry.specs():
+            parameters = self._tool_parameters_schema(spec.get("parameters", {}))
+            specs.append({
+                "type": "function",
+                "function": {
+                    "name": spec["name"],
+                    "description": spec["description"],
+                    "parameters": parameters,
+                },
+            })
+        return specs
+
+    @staticmethod
+    def _tool_parameters_schema(parameters: dict[str, Any]) -> dict[str, Any]:
+        props: dict[str, Any] = {}
+        required: list[str] = []
+        for name, kind in parameters.items():
+            if kind == "string":
+                props[name] = {"type": "string"}
+                required.append(name)
+            elif kind == "integer":
+                props[name] = {"type": "integer"}
+            elif kind == "array":
+                props[name] = {"type": "array", "items": {"type": "string"}}
+            elif kind == "integer|null":
+                props[name] = {"anyOf": [{"type": "integer"}, {"type": "null"}]}
+            elif kind == "string|null":
+                props[name] = {"anyOf": [{"type": "string"}, {"type": "null"}]}
+            elif "|" in kind:
+                options = kind.split("|")
+                props[name] = {"type": "string", "enum": options}
+                required.append(name)
+            else:
+                props[name] = {"type": "string"}
+        return {"type": "object", "properties": props, "required": required, "additionalProperties": False}
+
+    @staticmethod
+    def _native_calls(response: dict[str, Any]) -> list[dict[str, Any]]:
+        choices = response.get("choices") or []
+        if not choices:
+            return []
+        message = choices[0].get("message") or {}
+        calls = message.get("tool_calls") or []
+        return [c for c in calls if isinstance(c, dict) and isinstance(c.get("function"), dict)]
 
     @staticmethod
     def _parse_tool_call(text: str) -> dict[str, Any] | None:
         stripped = text.strip()
         if stripped.startswith("```") and stripped.endswith("```"):
-            stripped = stripped.split("\n", 1)[1]
+            parts = stripped.split("\n", 1)
+            stripped = parts[1] if len(parts) == 2 else stripped
             stripped = stripped.rsplit("```", 1)[0].strip()
         try:
             obj = json.loads(stripped)
@@ -104,50 +215,66 @@ class Agent:
         })
         return child.run_once()
 
+    def _execute_tool(self, name: str, args: dict[str, Any]) -> Any:
+        if name == "bash" and self._looks_destructive(args.get("command", "")):
+            return {
+                "error": "Perintah shell berpotensi destruktif. Konfirmasi eksplisit diperlukan.",
+                "confirmation": f"CONFIRM {args.get('command', '')}",
+            }
+        try:
+            return self.registry.call(name, args, self._subagent)
+        except Exception as exc:
+            return {"error": str(exc)}
+
     def run_once(self) -> str:
         for _ in range(self.max_steps):
-            response = self._model_call()
-            call = self._parse_tool_call(response)
-            if not call:
-                self.messages.append({"role": "assistant", "content": response})
-                return response
+            response_text, response_json, native = self._model_call()
+            calls = self._native_calls(response_json) if native else []
+            if calls:
+                choices = response_json.get("choices") or []
+                assistant_message = (choices[0].get("message") or {}) if choices else {}
+                self.messages.append({
+                    "role": "assistant",
+                    "content": assistant_message.get("content"),
+                    "tool_calls": calls,
+                })
+                for call in calls:
+                    fn = call.get("function") or {}
+                    name = fn.get("name", "")
+                    raw_args = fn.get("arguments", "{}")
+                    try:
+                        args = json.loads(raw_args) if isinstance(raw_args, str) else (raw_args or {})
+                    except json.JSONDecodeError:
+                        args = {}
+                    result = self._execute_tool(name, args)
+                    self.messages.append({
+                        "role": "tool",
+                        "tool_call_id": call.get("id", ""),
+                        "content": json.dumps(result, ensure_ascii=False, default=str),
+                    })
+                continue
 
-            name = call["tool"]
-            args = call.get("args") or {}
+            fallback_call = self._parse_tool_call(response_text) if not native else None
+            if not fallback_call:
+                self.messages.append({"role": "assistant", "content": response_text})
+                return response_text
 
-            # Irreversible shell operations get an explicit confirmation.
-            if name == "bash" and self._looks_destructive(args.get("command", "")):
-                return (
-                    "Perintah shell yang berpotensi destruktif terdeteksi. "
-                    "Jalankan ulang dengan konfirmasi eksplisit: "
-                    "`CONFIRM <command>`."
-                )
-
-            try:
-                result = self.registry.call(name, args, self._subagent)
-            except Exception as exc:
-                result = {"error": str(exc)}
-
-            self.messages.append({"role": "assistant", "content": response})
+            name = fallback_call["tool"]
+            args = fallback_call.get("args") or {}
+            result = self._execute_tool(name, args)
+            self.messages.append({"role": "assistant", "content": response_text})
             self.messages.append({
-                "role": "tool",
-                "name": name,
-                "content": json.dumps(result, ensure_ascii=False, default=str),
+                "role": "user",
+                "content": "TOOL_RESULT " + json.dumps({"tool": name, "result": result}, ensure_ascii=False, default=str),
             })
-
-        return "Batas langkah agent tercapai; sesi dihentikan sebelum loop berlanjut."
+        return "Batas langkah agent tercapai; sesi dihentikan setelah 50 langkah."
 
     @staticmethod
     def _looks_destructive(command: str) -> bool:
         patterns = [
-            r"\brm\s+-rf\b",
-            r"\bmkfs\b",
-            r"\bdd\s+if=",
-            r"\bdrop\s+(database|table)\b",
-            r"\bgit\s+reset\s+--hard\b",
-            r"\bgit\s+clean\s+-fd\b",
-            r"\bshutdown\b",
-            r"\breboot\b",
+            r"\brm\s+-rf\b", r"\bmkfs\b", r"\bdd\s+if=",
+            r"\bdrop\s+(database|table)\b", r"\bgit\s+reset\s+--hard\b",
+            r"\bgit\s+clean\s+-fd\b", r"\bshutdown\b", r"\breboot\b",
         ]
         return any(re.search(p, command, re.I) for p in patterns)
 

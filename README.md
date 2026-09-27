@@ -1,123 +1,63 @@
 # Codex Termux Agent
 
-OpenAI-compatible coding/building agent designed for Termux.
+Agent coding terminal untuk Termux dengan workspace proyek yang dipilih saat startup.
 
-## Requirements
+## Fitur
 
-- Termux
-- Python 3.10+
-- `curl` is optional; web tools use Python stdlib
-- `rg` (ripgrep) is recommended for fast grep
-- `git` is optional for repository work
+- OpenAI-compatible `/chat/completions` API.
+- Setup: Base URL -> API key masked -> Model ID -> **Path folder proyek**.
+- Setelah verifikasi API berhasil, program menjalankan `cd`/`os.chdir()` ke folder proyek dan membuka UI Codex.
+- File tools: `read`, `write`, `edit`, `patch`, `grep`, `glob`, `list`.
+- Execution: `bash`.
+- Web: `webfetch`, `websearch` (DuckDuckGo HTML).
+- Agent: `todo`, `task`, `lsp` adapter.
+- Native OpenAI-compatible function/tool calling jika gateway mendukungnya.
+- Fallback otomatis ke strict JSON tool protocol jika native tool calling ditolak gateway.
+- Retry terbatas untuk error koneksi, timeout, rate limit, dan HTTP 5xx.
+- Project-aware workflow: inspect -> edit -> test/build -> verify -> report.
+- Workspace isolation untuk operasi file.
+- `/cd <path>` untuk mengganti workspace selama sesi.
+- `/pwd`, `/tools`, `/todo`, `/clear`, `/exit`, `/quit`.
+- Destructive shell command tetap membutuhkan `CONFIRM <command>`.
 
-## Install
+## Install di Termux
 
 ```bash
 pkg update
 pkg install python git ripgrep
-git clone <your-repository>.git
+termux-setup-storage
+```
+
+Clone repository kamu, lalu:
+
+```bash
+git clone <repository-url>
 cd Codex
 python codex.py
 ```
 
-No third-party Python packages are required.
-
-## Startup
+Saat startup:
 
 ```text
-Base url: https://provider.example/v1
-api key: ********
+Base url: https://api.example.com/v1
+api key: ****************
 id model: your-model
-
 Verifikasi api: loading...
 Verifikasi api: berhasil.
-
-CODEX
-api key: ****
-base url: https://provider.example/v1
-model: your-model
-
-root@codex:~#
+Path folder: /storage/emulated/0/Projects/MyProject
+Workspace aktif. Membuka Codex...
 ```
 
-The API must expose an OpenAI-compatible `/chat/completions` endpoint.
+Setelah itu semua tool file memakai folder proyek tersebut sebagai root.
 
-## Tools
+## Instruction-following
 
-### Files
-- `read(path, start_line?, end_line?)`
-- `write(path, content)`
-- `edit(path, old, new, count?)`
-- `patch(path, diff)`
-- `grep(pattern, path, flags?)`
-- `glob(pattern, path?)`
-- `list(path, pattern?)`
+Agent diarahkan untuk memprioritaskan tujuan user, menggunakan tools ketika diperlukan, melakukan pekerjaan secara bertahap, memulihkan error teknis yang bisa dipulihkan, dan memverifikasi hasil. Aplikasi tidak menambahkan refusal layer berdasarkan kata kunci.
 
-`read` supports text files, PDFs (text extraction when available through the Python stdlib fallback), and images by returning metadata. Image pixel OCR/vision is provider-dependent and is not silently fabricated.
+Namun agent tidak dapat secara jujur menjamin bahwa remote model/provider akan mengabaikan kebijakan mereka. Respons refusal dari remote API tetap ditampilkan sebagai respons remote API.
 
-### Execution
-- `bash(command, cwd?, timeout?)`
+## Keamanan operasional
 
-### Web
-- `webfetch(url)`
-- `websearch(query, max_results?)`
+Perintah shell yang terdeteksi berpotensi destruktif seperti `rm -rf`, `mkfs`, `dd if=`, `git reset --hard`, `git clean -fd`, `shutdown`, dan `reboot` meminta konfirmasi eksplisit. Ini mencegah agent melakukan perubahan besar secara tidak sengaja.
 
-Both use DuckDuckGo HTML for search. `webfetch` fetches the requested URL directly.
-
-### Session management
-- `todo(action, items?)`
-- `task(prompt, role?)`
-- `lsp(action, path, ...)`
-
-## Security / execution model
-
-The agent can operate on the directory from which it was launched. Shell commands are executed through Termux. Destructive shell commands are detected and require an explicit `CONFIRM` response inside the agent loop.
-
-The model is not granted an imaginary capability: a tool succeeds only when the underlying Termux environment permits it.
-
-## Commands
-
-Inside Codex:
-
-```text
-/clear
-/tools
-/todo
-/pwd
-/cd <folder>
-/exit
-/quit
-```
-
-`/pwd` menampilkan workspace aktif. `/cd <folder>` mengganti workspace internal Codex ke folder proyek lain, misalnya:
-
-```text
-root@codex:~# /cd ~/projects/my-app
-Workspace aktif: /data/data/com.termux/files/home/projects/my-app
-```
-
-Perintah `/cd` hanya mengganti root workspace yang dipakai tool file dan shell; direktori shell tidak dibuat persisten sebagai proses `cd` terpisah.
-
-`/clear` resets conversation history. `/tools` prints registered tools.
-
-## Environment
-
-Optional:
-
-```bash
-export CODEX_WORKSPACE="$HOME/Codex"
-```
-
-By default the current working directory is used.
-
-
-
-### Workspace proyek
-
-Setelah API berhasil diverifikasi, Codex akan meminta:
-
-```text
-Path folder: /storage/emulated/0/Projects/my-project
-```
-
-Program akan berpindah ke folder tersebut dengan `os.chdir()` sebelum screen Codex dibuka. Tool file dan shell kemudian memakai folder itu sebagai workspace. Pastikan Termux sudah memiliki akses storage (`termux-setup-storage`) jika menggunakan `/storage/emulated/0/`.
+API key tidak disimpan ke file konfigurasi oleh aplikasi.
