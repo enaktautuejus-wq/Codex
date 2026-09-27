@@ -1,3 +1,4 @@
+import os
 import tempfile
 import unittest
 from pathlib import Path
@@ -21,3 +22,23 @@ class ToolTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+def test_workspace_path():
+    from tempfile import TemporaryDirectory
+    from codex.tools import Workspace, ToolError
+    with TemporaryDirectory() as d:
+        ws = Workspace(d)
+        assert ws.path("a.txt").parent == ws.root
+        try:
+            ws.path("../outside.txt")
+        except ToolError:
+            pass
+        else:
+            raise AssertionError("workspace escape was not blocked")
+
+class WorkspacePathTest(unittest.TestCase):
+    def test_workspace_is_absolute(self):
+        from codex.tools import Workspace
+        with tempfile.TemporaryDirectory() as td:
+            self.assertTrue(os.path.isabs(Workspace(td).root))

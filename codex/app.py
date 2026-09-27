@@ -1,9 +1,11 @@
 from __future__ import annotations
+import os
 from .api import post_json
 from .config import Config
-from .ui import setup, verify, run_ui
+from .ui import setup, verify, choose_workspace, run_ui
 from .tools import ToolRegistry
 from .agent import Agent
+
 
 def main():
     config = setup()
@@ -14,7 +16,7 @@ def main():
             config.api_key,
             {
                 "model": config.model,
-                "messages": [{"role":"user","content":"Reply exactly OK"}],
+                "messages": [{"role": "user", "content": "Reply exactly OK"}],
                 "max_tokens": 8,
                 "temperature": 0,
             },
@@ -22,6 +24,12 @@ def main():
         )
 
     verify(config, verification)
-    registry = ToolRegistry(config.workspace)
+
+    # Choose the actual project/work directory only after API verification.
+    workspace = choose_workspace()
+    config.workspace = workspace
+    os.chdir(workspace)
+
+    registry = ToolRegistry(workspace)
     agent = Agent(config, registry)
     run_ui(agent, config, registry)

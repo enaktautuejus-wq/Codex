@@ -24,12 +24,9 @@ No third-party Python packages are required.
 
 ## Startup
 
-API key sekarang dibaca dengan input Termux-friendly: karakter yang diketik/ditempel tampil sebagai `*`, jadi ada feedback visual tanpa menampilkan nilai key. Backspace dan Enter didukung.
-
-
 ```text
 Base url: https://provider.example/v1
-api key (ketik/tempel, tampil sebagai *): ********
+api key: ********
 id model: your-model
 
 Verifikasi api: loading...
@@ -86,9 +83,20 @@ Inside Codex:
 /clear
 /tools
 /todo
+/pwd
+/cd <folder>
 /exit
 /quit
 ```
+
+`/pwd` menampilkan workspace aktif. `/cd <folder>` mengganti workspace internal Codex ke folder proyek lain, misalnya:
+
+```text
+root@codex:~# /cd ~/projects/my-app
+Workspace aktif: /data/data/com.termux/files/home/projects/my-app
+```
+
+Perintah `/cd` hanya mengganti root workspace yang dipakai tool file dan shell; direktori shell tidak dibuat persisten sebagai proses `cd` terpisah.
 
 `/clear` resets conversation history. `/tools` prints registered tools.
 
@@ -102,3 +110,14 @@ export CODEX_WORKSPACE="$HOME/Codex"
 
 By default the current working directory is used.
 
+
+
+### Workspace proyek
+
+Setelah API berhasil diverifikasi, Codex akan meminta:
+
+```text
+Path folder: /storage/emulated/0/Projects/my-project
+```
+
+Program akan berpindah ke folder tersebut dengan `os.chdir()` sebelum screen Codex dibuka. Tool file dan shell kemudian memakai folder itu sebagai workspace. Pastikan Termux sudah memiliki akses storage (`termux-setup-storage`) jika menggunakan `/storage/emulated/0/`.
