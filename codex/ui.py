@@ -6,6 +6,8 @@ import termios
 import tty
 from .config import Config, normalize_base_url
 from .tools import Workspace
+from .project import ProjectIndex
+from .renderer import render_markdown
 
 RED = "\033[91m"
 CYAN = "\033[96m"
@@ -93,7 +95,12 @@ def setup() -> Config:
     if not key or not model:
         raise ValueError("API key dan model wajib diisi.")
     workspace = os.path.abspath(os.environ.get("CODEX_WORKSPACE", os.getcwd()))
-    return Config(base, key, model, workspace)
+    try: max_tokens = max(512, min(8192, int(os.environ.get("CODEX_MAX_TOKENS", "2048"))))
+    except ValueError: max_tokens = 2048
+    try: temperature = max(0.0, min(1.0, float(os.environ.get("CODEX_TEMPERATURE", "0.15"))))
+    except ValueError: temperature = 0.15
+    stream = os.environ.get("CODEX_STREAM", "1").lower() not in {"0","false","no"}
+    return Config(base, key, model, workspace, max_tokens=max_tokens, temperature=temperature, stream=stream)
 
 def verify(config: Config, api_call):
     clear()
@@ -148,10 +155,16 @@ def _change_workspace(agent, config, registry, raw_path: str):
         return f"Workspace tidak ditemukan atau bukan direktori: {candidate}"
     os.chdir(candidate)
     registry.ws = Workspace(candidate)
+    registry.config = config
+    registry.memory = __import__('codex.memory', fromlist=['MemoryStore']).MemoryStore(candidate)
+    registry.project = ProjectIndex(candidate)
+    registry.checkpoints = __import__('codex.checkpoint', fromlist=['Checkpoints']).Checkpoints(candidate)
+    registry.project.scan()
     config.workspace = candidate
+    agent.project_context = registry.project.compact_context()
     agent.messages.append({
         "role": "system",
-        "content": f"Workspace aktif sekarang: {candidate}. Gunakan workspace ini untuk operasi file dan shell.",
+        "content": f"Workspace aktif sekarang: {candidate}. Gunakan workspace ini untuk operasi file dan shell. Project context baru:\n{agent.project_context}",
     })
     return f"Workspace aktif: {candidate}"
 
@@ -178,17 +191,15 @@ def run_ui(agent, config, registry):
             target = text[3:].strip()
             print(_change_workspace(agent, config, registry, target) + "\n")
             continue
-        if text == "/tools":
-            for spec in registry.specs():
-                print(f"- {spec['name']}: {spec['description']}")
-            print()
-            continue
-        if text == "/todo":
-            print(registry.todo.run("read")); print(); continue
         try:
-            answer = agent.run(text)
             print(f"{CYAN}root@ai-codex:~#{RESET}")
-            print(answer)
-            print()
+            streamed=[]
+            agent.stream_callback = lambda piece: (streamed.append(piece), print(piece, end='', flush=True))
+            answer = agent.run(text)
+            agent.stream_callback = None
+            if streamed:
+                print("\n")
+            else:
+                print(render_markdown(answer)); print()
         except Exception as exc:
             print(f"{RED}API/tool error:{RESET} {exc}\n")

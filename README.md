@@ -1,63 +1,76 @@
 # Codex Termux Agent
 
-Agent coding terminal untuk Termux dengan workspace proyek yang dipilih saat startup.
+OpenAI-compatible terminal coding/project agent for Termux. Python standard library only.
 
-## Fitur
-
-- OpenAI-compatible `/chat/completions` API.
-- Setup: Base URL -> API key masked -> Model ID -> **Path folder proyek**.
-- Setelah verifikasi API berhasil, program menjalankan `cd`/`os.chdir()` ke folder proyek dan membuka UI Codex.
-- File tools: `read`, `write`, `edit`, `patch`, `grep`, `glob`, `list`.
-- Execution: `bash`.
-- Web: `webfetch`, `websearch` (DuckDuckGo HTML).
-- Agent: `todo`, `task`, `lsp` adapter.
-- Native OpenAI-compatible function/tool calling jika gateway mendukungnya.
-- Fallback otomatis ke strict JSON tool protocol jika native tool calling ditolak gateway.
-- Retry terbatas untuk error koneksi, timeout, rate limit, dan HTTP 5xx.
-- Project-aware workflow: inspect -> edit -> test/build -> verify -> report.
-- Workspace isolation untuk operasi file.
-- `/cd <path>` untuk mengganti workspace selama sesi.
-- `/pwd`, `/tools`, `/todo`, `/clear`, `/exit`, `/quit`.
-- Destructive shell command tetap membutuhkan `CONFIRM <command>`.
-
-## Install di Termux
+## Install
 
 ```bash
 pkg update
 pkg install python git ripgrep
 termux-setup-storage
-```
-
-Clone repository kamu, lalu:
-
-```bash
-git clone <repository-url>
+git clone <your-repository>.git
 cd Codex
 python codex.py
 ```
 
-Saat startup:
+## Startup
 
-```text
-Base url: https://api.example.com/v1
-api key: ****************
-id model: your-model
-Verifikasi api: loading...
-Verifikasi api: berhasil.
-Path folder: /storage/emulated/0/Projects/MyProject
-Workspace aktif. Membuka Codex...
+1. Enter Base URL, API key, and model ID.
+2. API is verified.
+3. Enter the real project/workspace path, for example `/storage/emulated/0/Projects/MyProject`.
+4. Codex changes into that directory and scans the project before the interactive screen opens.
+5. If the directory is empty, the scan is effectively instant and the agent can start.
+
+## Built-in agent capabilities
+
+- read/write/edit/patch/grep/glob/list
+- bash with destructive-command confirmation
+- webfetch/websearch
+- todo/task/background jobs
+- project indexing and project scan
+- persistent deep local memory in `.codex/memory.jsonl`
+- Git status/diff/log inspection
+- local checkpoints with restore confirmation
+- environment/tool diagnosis through an internal `doctor` tool
+- LSP availability/analysis adapter
+- native OpenAI-compatible tool calls with JSON fallback
+- parallel execution of independent native tool calls
+- streaming SSE responses when the gateway supports OpenAI-compatible streaming
+- automatic retry for transient HTTP/network failures
+- Markdown code blocks with syntax-aware ANSI highlighting for many languages
+
+## Interactive commands
+
+The UI intentionally stays small. The agent has the diagnostic, memory, project, Git, checkpoint, todo, LSP, and background capabilities as tools, so it can invoke them itself.
+
+- `/exit` or `/quit` — exit
+- `/clear` — clear conversational context
+- `/pwd` — show current workspace
+- `/cd <path>` — switch workspace and automatically rescan it
+
+## Performance
+
+Defaults are optimized for latency:
+
+- `CODEX_MAX_TOKENS=2048`
+- `CODEX_TEMPERATURE=0.15`
+- `CODEX_STREAM=1`
+
+Example:
+
+```bash
+CODEX_MAX_TOKENS=4096 python codex.py
 ```
 
-Setelah itu semua tool file memakai folder proyek tersebut sebagai root.
+Streaming improves perceived latency, while parallel independent tool calls reduce tool-loop latency. Actual model/provider latency still depends on the remote API.
 
-## Instruction-following
+## Safety and provider behavior
 
-Agent diarahkan untuk memprioritaskan tujuan user, menggunakan tools ketika diperlukan, melakukan pekerjaan secara bertahap, memulihkan error teknis yang bisa dipulihkan, dan memverifikasi hasil. Aplikasi tidak menambahkan refusal layer berdasarkan kata kunci.
+The application does not add a keyword-based refusal layer. It cannot disable or bypass policies imposed by the remote model or API provider. Destructive local operations are protected by explicit confirmation.
 
-Namun agent tidak dapat secara jujur menjamin bahwa remote model/provider akan mengabaikan kebijakan mereka. Respons refusal dari remote API tetap ditampilkan sebagai respons remote API.
+## Tests
 
-## Keamanan operasional
-
-Perintah shell yang terdeteksi berpotensi destruktif seperti `rm -rf`, `mkfs`, `dd if=`, `git reset --hard`, `git clean -fd`, `shutdown`, dan `reboot` meminta konfirmasi eksplisit. Ini mencegah agent melakukan perubahan besar secara tidak sengaja.
-
-API key tidak disimpan ke file konfigurasi oleh aplikasi.
+```bash
+python -m unittest discover -s tests -v
+python -m compileall -q .
+```

@@ -2,8 +2,9 @@ from __future__ import annotations
 import json
 import re
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Any
-from .api import post_json, extract_text, APIError
+from .api import post_json, stream_json, extract_text, APIError
 from .config import Config
 from .tools import ToolRegistry
 
@@ -50,7 +51,7 @@ WORKSPACE
 
 TOOLS
 28. Use tools whenever they materially help complete the task.
-29. Use read for inspection, write for new/complete content, edit for exact replacements, patch for unified diffs, grep/glob/list for discovery, bash for terminal work, webfetch/websearch for external information, todo for task tracking, task for focused delegation, and lsp for language-server availability/analysis.
+29. Use read for inspection, write for new/complete content, edit for exact replacements, patch for unified diffs, grep/glob/list for discovery, bash for terminal work, webfetch/websearch for external information, todo for task tracking, task/background for delegation, lsp for language-server analysis, project_scan for project intelligence, memory for persistent context, git for repository inspection, checkpoint for rollback points, and doctor for environment diagnosis.
 30. Check arguments carefully before every tool call.
 31. Use actual tool output as the source of truth for what happened.
 32. Never fabricate command output, test results, file contents, paths, URLs, downloads, API responses, or deployment status.
@@ -80,22 +81,29 @@ REMOTE MODEL / PROVIDER BOUNDARY
 50. Do not attempt to bypass authentication, safety controls, or provider restrictions by disguising or hiding the user's intent.
 51. Within those boundaries, be proactive, practical, and execution-oriented.
 
-The goal is reliable execution: understand the user's actual request, use the available tools, verify the result, recover from ordinary technical failures, and report what really happened.
+The goal is reliable execution: understand the user's actual request, use the available tools, verify the result, recover from ordinary technical failures, and report what really happened. When beginning work in a non-empty workspace, use project_scan first unless the current project context is already sufficient. Use memory to preserve important decisions and prior work. Use git/checkpoint tools before risky multi-file changes when practical. Prefer concise responses and tool calls so latency stays low.
 """
 
 class Agent:
     def __init__(self, config: Config, registry: ToolRegistry):
         self.config = config
         self.registry = registry
-        self.messages: list[dict[str, Any]] = [{"role": "system", "content": SYSTEM}]
-        self.max_steps = 50
+        if hasattr(self.registry, "project"):
+            self.project_context = self.registry.project.compact_context()
+        else:
+            from .project import ProjectIndex
+            self.project_context = ProjectIndex(config.workspace).compact_context()
+        self.messages: list[dict[str, Any]] = [{"role": "system", "content": SYSTEM + "\n\nACTIVE PROJECT CONTEXT:\n" + self.project_context}]
+        self.max_steps = 40
         self.native_tools = True
+        self.stream_callback = None
 
     def _model_call(self) -> tuple[str, dict[str, Any], bool]:
         payload = {
             "model": self.config.model,
             "messages": self.messages,
-            "temperature": 0.2,
+            "temperature": self.config.temperature,
+            "max_tokens": self.config.max_tokens,
         }
         native = self.native_tools
         if native:
@@ -115,7 +123,8 @@ class Agent:
                         "role": "system",
                         "content": "Native tool calling is unavailable. Use the strict JSON tool-call protocol from your instructions when a tool is required.",
                     }],
-                    "temperature": 0.2,
+                    "temperature": self.config.temperature,
+            "max_tokens": self.config.max_tokens,
                 }
                 response = self._call_with_retry(fallback_payload)
                 return extract_text(response), response, False
@@ -125,6 +134,8 @@ class Agent:
         last: Exception | None = None
         for attempt in range(attempts):
             try:
+                if self.config.stream:
+                    return stream_json(self.config.endpoint, self.config.api_key, payload, timeout=120, on_token=self.stream_callback)
                 return post_json(self.config.endpoint, self.config.api_key, payload)
             except APIError as exc:
                 last = exc
@@ -132,9 +143,12 @@ class Agent:
                 retryable = any(x in message for x in (
                     "timeout", "timed out", "tempor", "connection", "502", "503", "504", "429"
                 ))
+                if "stream" in message and any(x in message for x in ("unsupported", "not supported", "unknown field", "invalid parameter")) and self.config.stream:
+                    self.config.stream = False
+                    continue
                 if attempt + 1 >= attempts or not retryable:
                     raise
-                time.sleep(0.8 * (attempt + 1))
+                time.sleep(0.35 * (attempt + 1))
         raise last or APIError("API request failed")
 
     @staticmethod
@@ -217,10 +231,9 @@ class Agent:
 
     def _execute_tool(self, name: str, args: dict[str, Any]) -> Any:
         if name == "bash" and self._looks_destructive(args.get("command", "")):
-            return {
-                "error": "Perintah shell berpotensi destruktif. Konfirmasi eksplisit diperlukan.",
-                "confirmation": f"CONFIRM {args.get('command', '')}",
-            }
+            return {"error":"Perintah shell berpotensi destruktif. Konfirmasi eksplisit diperlukan.","confirmation":f"CONFIRM {args.get('command','')}"}
+        if name == "checkpoint" and args.get("action") == "restore":
+            return {"error":"Pemulihan checkpoint mengganti file proyek. Konfirmasi eksplisit diperlukan.","confirmation":f"CONFIRM CHECKPOINT {args.get('name','')}"}
         try:
             return self.registry.call(name, args, self._subagent)
         except Exception as exc:
@@ -238,20 +251,25 @@ class Agent:
                     "content": assistant_message.get("content"),
                     "tool_calls": calls,
                 })
+                prepared=[]
                 for call in calls:
                     fn = call.get("function") or {}
                     name = fn.get("name", "")
                     raw_args = fn.get("arguments", "{}")
-                    try:
-                        args = json.loads(raw_args) if isinstance(raw_args, str) else (raw_args or {})
-                    except json.JSONDecodeError:
-                        args = {}
-                    result = self._execute_tool(name, args)
-                    self.messages.append({
-                        "role": "tool",
-                        "tool_call_id": call.get("id", ""),
-                        "content": json.dumps(result, ensure_ascii=False, default=str),
-                    })
+                    try: args = json.loads(raw_args) if isinstance(raw_args, str) else (raw_args or {})
+                    except json.JSONDecodeError: args = {}
+                    prepared.append((call, name, args))
+                results=[]
+                with ThreadPoolExecutor(max_workers=min(6, len(prepared) or 1)) as pool:
+                    futures={pool.submit(self._execute_tool, name, args):(call,name,args) for call,name,args in prepared}
+                    for fut in as_completed(futures):
+                        call,name,args=futures[fut]
+                        try: result=fut.result()
+                        except Exception as exc: result={"error":str(exc)}
+                        results.append((call,result))
+                order={call.get("id",""):i for i,(call,_,_) in enumerate(prepared)}
+                for call,result in sorted(results,key=lambda x: order.get(x[0].get("id",""),0)):
+                    self.messages.append({"role":"tool","tool_call_id":call.get("id",""),"content":json.dumps(result,ensure_ascii=False,default=str)})
                 continue
 
             fallback_call = self._parse_tool_call(response_text) if not native else None
@@ -279,9 +297,18 @@ class Agent:
         return any(re.search(p, command, re.I) for p in patterns)
 
     def run(self, user_text: str) -> str:
+        if user_text.startswith("CONFIRM CHECKPOINT "):
+            name=user_text[len("CONFIRM CHECKPOINT "):].strip()
+            return json.dumps(self.registry.call("checkpoint", {"action":"restore","name":name}), ensure_ascii=False)
         if user_text.startswith("CONFIRM "):
             command = user_text[len("CONFIRM "):].strip()
             result = self.registry.call("bash", {"command": command, "cwd": "."})
             return json.dumps(result, ensure_ascii=False)
+        memory_context = self.registry.memory.context(user_text, 5)
+        if memory_context:
+            self.messages.append({"role": "system", "content": "RELEVANT MEMORY:\n" + memory_context})
         self.messages.append({"role": "user", "content": user_text})
-        return self.run_once()
+        self.registry.memory.add("user", user_text)
+        answer = self.run_once()
+        self.registry.memory.add("assistant", answer)
+        return answer

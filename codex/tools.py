@@ -11,6 +11,12 @@ import urllib.parse
 import urllib.request
 from pathlib import Path
 from typing import Any, Callable
+from .project import ProjectIndex
+from .memory import MemoryStore
+from .gitops import status as git_status, diff as git_diff, log as git_log
+from .checkpoint import Checkpoints
+from .doctor import run as doctor_run
+from .jobs import JobStore
 
 class ToolError(RuntimeError):
     pass
@@ -244,6 +250,11 @@ class ToolRegistry:
     def __init__(self, workspace: str):
         self.ws = Workspace(workspace)
         self.todo = TodoStore()
+        self.memory = MemoryStore(workspace)
+        self.project = ProjectIndex(workspace)
+        self.checkpoints = Checkpoints(workspace)
+        self.jobs = JobStore()
+        self.config = None
 
     def specs(self) -> list[dict[str, Any]]:
         return [
@@ -260,6 +271,12 @@ class ToolRegistry:
             {"name":"todo","description":"Manage session tasks.","parameters":{"action":"read|write|add|done|clear","items":"array"}},
             {"name":"task","description":"Delegate a focused subtask to the same model.","parameters":{"prompt":"string","role":"string"}},
             {"name":"lsp","description":"Use an available language-server command for diagnostics/analysis.","parameters":{"action":"check|symbols|definition","path":"string","language":"string"}},
+            {"name":"project_scan","description":"Scan and summarize the active project before coding.","parameters":{}},
+            {"name":"memory","description":"Search or save persistent project/session memory.","parameters":{"action":"search|add|recent","query":"string","kind":"string","content":"string"}},
+            {"name":"git","description":"Inspect Git status, diff, or recent log without changing repository state.","parameters":{"action":"status|diff|staged_diff|log","count":"integer"}},
+            {"name":"checkpoint","description":"Create, list, or restore a local project checkpoint.","parameters":{"action":"create|list|restore","name":"string","label":"string"}},
+            {"name":"doctor","description":"Diagnose Codex, workspace, tools, and environment health.","parameters":{}},
+            {"name":"background","description":"Run a safe read/analysis subtask in the background and inspect its status later.","parameters":{"action":"start|list|get","prompt":"string","job_id":"string"}},
         ]
 
     def call(self, name: str, args: dict[str, Any], subagent: Callable[[str, str], str] | None = None) -> Any:
@@ -279,6 +296,38 @@ class ToolRegistry:
             return subagent(args["prompt"], args.get("role", "general"))
         if name == "lsp":
             return self._lsp(args)
+        if name == "project_scan":
+            return self.project.scan()
+        if name == "memory":
+            action=args.get("action","search")
+            if action == "search": return self.memory.search(args.get("query",""), 10)
+            if action == "recent": return self.memory.recent(12)
+            if action == "add": self.memory.add(args.get("kind","note"), args.get("content","")); return {"saved":True}
+            raise ToolError("memory action tidak dikenal")
+        if name == "git":
+            action=args.get("action","status")
+            if action == "status": return git_status(str(self.ws.root))
+            if action == "diff": return git_diff(str(self.ws.root), False)
+            if action == "staged_diff": return git_diff(str(self.ws.root), True)
+            if action == "log": return git_log(str(self.ws.root), args.get("count",10))
+            raise ToolError("git action tidak dikenal")
+        if name == "checkpoint":
+            action=args.get("action","list")
+            if action == "create": return {"path":self.checkpoints.create(args.get("label","auto"))}
+            if action == "list": return self.checkpoints.list()
+            if action == "restore": return {"restored":self.checkpoints.restore(args["name"])}
+            raise ToolError("checkpoint action tidak dikenal")
+        if name == "doctor":
+            return doctor_run(str(self.ws.root), self.config, self)
+        if name == "background":
+            action=args.get("action","list")
+            if action == "list": return self.jobs.list()
+            if action == "get": return self.jobs.get(args.get("job_id","")) or {"error":"job tidak ditemukan"}
+            if action == "start":
+                if subagent is None: raise ToolError("Subagent handler belum tersedia.")
+                prompt=args.get("prompt","")
+                return self.jobs.start(lambda: subagent(prompt,"background analysis"), "AI background task")
+            raise ToolError("background action tidak dikenal")
         raise ToolError(f"Tool tidak dikenal: {name}")
 
     def _lsp(self, args: dict[str, Any]) -> Any:

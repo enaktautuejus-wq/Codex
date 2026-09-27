@@ -5,6 +5,7 @@ from .config import Config
 from .ui import setup, verify, choose_workspace, run_ui
 from .tools import ToolRegistry
 from .agent import Agent
+from .project import ProjectIndex
 
 
 def main():
@@ -31,5 +32,9 @@ def main():
     os.chdir(workspace)
 
     registry = ToolRegistry(workspace)
+    registry.config = config
+    print("Menganalisis isi folder proyek...", flush=True)
+    index = registry.project.scan()
+    print(f"Analisis selesai: {index['files']} file, {index['directories']} folder.")
     agent = Agent(config, registry)
     run_ui(agent, config, registry)
