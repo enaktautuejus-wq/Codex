@@ -88,6 +88,13 @@ python -m compileall -q .
 - Persistent AI memory is stored outside the active workspace by default at `~/.codex/projects/<project-id>/memory.jsonl` (override the root with `CODEX_HOME`).
 - The banner does not display the API key, Base URL, model ID, or workspace path.
 
+## V8 live coding UX
+
+- Model output is rendered incrementally as SSE chunks arrive instead of waiting for the full answer.
+- Fenced code is held until its fence closes, then rendered once, so streaming does not corrupt Markdown code blocks.
+- Tool activity is shown live (read/write/edit/patch/delete/verify/etc.) without exposing private chain-of-thought.
+- The coding prompt uses an explicit anti-slop workflow: inspect, act, verify, and report actual results.
+
 ## Faster streaming
 
 The SSE reader uses incremental reads instead of waiting for large buffered chunks. Native tool calls can stream normally; the JSON fallback tool protocol is kept off the live UI so tool JSON does not appear as messy assistant output.
@@ -105,6 +112,3 @@ Markdown fenced blocks are rendered as terminal code panels with language detect
 - Runtime telemetry reports request count, provider-reported token usage, latency, and rate-limit headers when available.
 - Context/output limits are not hard-coded by Codex; provider/model limits and provider errors drive compaction/retry behavior.
 - Verification is task-aware and is not forced for non-build/non-test work.
-
-## V8 package note
-This V8 archive is a verified repackaging of the latest JACK V7 build. The previous V8 download artifact was missing; this archive fixes the download/package issue.

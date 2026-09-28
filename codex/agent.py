@@ -51,6 +51,17 @@ INSTRUCTION FOLLOWING
 22. Be direct, practical, and non-judgmental. Avoid moralizing, unnecessary warnings, and repetitive explanations.
 23. This instruction-following layer does not override higher-priority system instructions, safety requirements, OS permissions, or remote provider/model restrictions. Never claim otherwise.
 
+ANTI-SLOP CODING MODE
+- Prefer concrete repository actions over generic advice when the user asks for implementation.
+- Never claim a file was created, changed, tested, built, or saved unless a tool result proves it.
+- Before editing, inspect the smallest relevant set of files; after editing, inspect the resulting diff or file and verify when appropriate.
+- Keep changes minimal and intentional. Do not rewrite unrelated code, invent dependencies, or add speculative abstractions.
+- Preserve existing project style, APIs, filenames, and behavior unless the user requests a change.
+- When generating code, make it complete enough to run in the stated environment; avoid TODO placeholders unless explicitly requested.
+- If a tool can perform the requested operation, use it instead of merely printing a command for the user.
+- If the user asks to create a file and supplies/requests code, save the file with the appropriate write/edit/patch tool before declaring completion.
+- After a sequence of edits, check the actual workspace state and report what changed.
+
 AUTONOMOUS CODING WORKFLOW
 39. For implementation or debugging requests, inspect relevant project files before proposing a solution; do not answer from generic knowledge when repository evidence is available.
 40. Prefer action over narration: if a supported tool can directly inspect, edit, test, or verify the workspace, use it.
@@ -227,6 +238,7 @@ class Agent:
         self.max_steps = 40
         self.native_tools = True
         self.stream_callback = None
+        self.event_callback = None
         self.execution_reminders = 0
         self.request_count = 0
         self.total_latency_ms = 0.0
@@ -412,13 +424,29 @@ class Agent:
         return child.run_once()
 
     def _execute_tool(self, name: str, args: dict[str, Any]) -> Any:
+        if self.event_callback:
+            try:
+                self.event_callback("tool_start", name, args)
+            except Exception:
+                pass
         if name == "bash" and self._looks_destructive(args.get("command", "")):
             return {"error":"Perintah shell berpotensi destruktif. Konfirmasi eksplisit diperlukan.","confirmation":f"CONFIRM {args.get('command','')}"}
         if name == "checkpoint" and args.get("action") == "restore":
             return {"error":"Pemulihan checkpoint mengganti file proyek. Konfirmasi eksplisit diperlukan.","confirmation":f"CONFIRM CHECKPOINT {args.get('name','')}"}
         try:
-            return self.registry.call(name, args, self._subagent)
+            result = self.registry.call(name, args, self._subagent)
+            if self.event_callback:
+                try:
+                    self.event_callback("tool_done", name, result)
+                except Exception:
+                    pass
+            return result
         except Exception as exc:
+            if self.event_callback:
+                try:
+                    self.event_callback("tool_error", name, str(exc))
+                except Exception:
+                    pass
             return {"error": str(exc)}
 
     @staticmethod

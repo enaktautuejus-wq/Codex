@@ -1,5 +1,6 @@
 from __future__ import annotations
 import os
+import re
 import shutil
 import sys
 import subprocess
@@ -276,16 +277,76 @@ def run_ui(agent, config, registry):
         try:
             print(f"{CYAN}root@ai-codex:~#{RESET}")
             print(f"{DIM}⠿ Jack sedang berpikir...{RESET}", flush=True)
+
+            class _LiveAnswer:
+                def __init__(self):
+                    self.full=[]
+                    self.buffer=""
+                    self.in_fence=False
+                    self.fence_lines=[]
+                    self.fence_char="`"
+                    self.last_flush=0.0
+                def _write(self, text):
+                    if text:
+                        import sys
+                        sys.stdout.write(text); sys.stdout.flush()
+                def token(self, piece):
+                    self.full.append(piece)
+                    self.buffer += piece
+                    while True:
+                        if not self.in_fence:
+                            m=re.search(r"(?m)^[ \t]{0,8}(`{3,}|~{3,})[^\n]*\n", self.buffer)
+                            if not m:
+                                # Keep a small tail so a fence split across SSE chunks is safe.
+                                safe=self.buffer[:-32] if len(self.buffer)>32 else ""
+                                if safe:
+                                    self._write(safe); self.buffer=self.buffer[len(safe):]
+                                return
+                            self._write(self.buffer[:m.start()])
+                            self.fence_char=m.group(1)[0]
+                            self.fence_lines=[self.buffer[m.start():m.end()]]
+                            self.buffer=self.buffer[m.end():]
+                            self.in_fence=True
+                        else:
+                            pat=r"(?m)^[ \t]{0,8}"+re.escape(self.fence_char)+r"{3,}[ \t]*$"
+                            m=re.search(pat, self.buffer)
+                            if not m:
+                                self.fence_lines.append(self.buffer)
+                                self.buffer=""
+                                return
+                            self.fence_lines.append(self.buffer[:m.end()])
+                            block="".join(self.fence_lines)
+                            self._write(render_markdown(block)+"\n")
+                            self.buffer=self.buffer[m.end():]
+                            self.fence_lines=[]; self.in_fence=False
+                def finish(self, final):
+                    if final and final != "".join(self.full):
+                        self.full=[final]
+                    if self.in_fence:
+                        self._write(render_markdown("".join(self.fence_lines)+self.buffer)+"\n")
+                    else:
+                        self._write(render_markdown(self.buffer)+"\n")
+                    return final or "".join(self.full)
+
+            live=_LiveAnswer()
             streamed=[]
-            def on_token(piece): streamed.append(piece)
+            def on_token(piece):
+                streamed.append(piece)
+                live.token(piece)
+            def on_event(kind, name, data):
+                labels={
+                    "tool_start":"Menjalankan", "tool_done":"Selesai", "tool_error":"Gagal"
+                }
+                label=labels.get(kind, kind)
+                print(f"\r\033[2K{DIM}↳ {label}: {name}{RESET}", flush=True)
             agent.stream_callback = on_token
+            agent.event_callback = on_event
             try:
                 answer = agent.run(text)
             finally:
                 agent.stream_callback = None
-            last_answer = "".join(streamed) if streamed else answer
-            print("\r\033[2K", end="")
-            print(render_markdown(last_answer))
+                agent.event_callback = None
+            last_answer = live.finish(answer if answer else ("".join(streamed) if streamed else answer))
             stats=agent.runtime_stats(); usage=stats.get("usage") or {}
             extra=f"request {stats.get('requests',0)}"
             if usage.get("total_tokens") is not None: extra += f" · tokens {usage['total_tokens']}"
