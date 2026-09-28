@@ -7,7 +7,7 @@ class Config:
     api_key: str
     model: str
     workspace: str
-    max_tokens: int = 2048
+    max_tokens: int | None = None
     temperature: float = 0.15
     stream: bool = True
 

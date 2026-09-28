@@ -28,7 +28,8 @@ def stream_json(endpoint: str, api_key: str, payload: dict[str, Any], timeout: i
         with urllib.request.urlopen(_request(endpoint,api_key,data,'text/event-stream'),timeout=timeout) as response:
             buffer=''
             while True:
-                chunk=response.read(4096)
+                # read1/readline avoids urllib buffering a large chunk before emitting SSE tokens.
+                chunk=response.read1(4096) if hasattr(response, 'read1') else response.readline()
                 if not chunk: break
                 buffer += chunk.decode('utf-8','replace')
                 lines=buffer.split('\n'); buffer=lines.pop()
@@ -44,6 +45,8 @@ def stream_json(endpoint: str, api_key: str, payload: dict[str, Any], timeout: i
                     if not choices: continue
                     delta=choices[0].get('delta') or {}
                     piece=delta.get('content')
+                    if not isinstance(piece, str) and isinstance(delta.get('refusal'), str):
+                        piece = delta.get('refusal')
                     if isinstance(piece,str):
                         content.append(piece)
                         if on_token: on_token(piece)
@@ -65,5 +68,11 @@ def extract_text(response: dict[str, Any]) -> str:
     if not choices: return '[Respons API tidak memiliki choices.]'
     message=choices[0].get('message') or {}; content=message.get('content')
     if isinstance(content,str): return content
-    if isinstance(content,list): return ''.join(item.get('text','') for item in content if isinstance(item,dict))
+    if isinstance(content,list):
+        return ''.join(item.get('text','') for item in content if isinstance(item,dict))
+    refusal = message.get('refusal')
+    if isinstance(refusal, str) and refusal:
+        return refusal
+    if isinstance(response.get('refusal'), str):
+        return response['refusal']
     return str(content or '')

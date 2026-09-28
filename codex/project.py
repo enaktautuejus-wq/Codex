@@ -42,4 +42,35 @@ class ProjectIndex:
         if d['configs']: lines.append('Build/config files: '+', '.join(d['configs'][:30]))
         if d['samples']:
             lines.append('Representative files: '+', '.join(x['path'] for x in d['samples']))
+        # Give the model useful project knowledge, not only filenames. Keep it bounded
+        # and prioritize documentation/config/entrypoints while avoiding secrets.
+        priority = []
+        preferred = {
+            'README.md','README','pyproject.toml','package.json','Cargo.toml','go.mod',
+            'requirements.txt','pom.xml','build.gradle','settings.gradle','Dockerfile',
+            'docker-compose.yml','docker-compose.yaml'
+        }
+        for rel in d.get('configs', []):
+            if Path(rel).name in preferred:
+                priority.append(rel)
+        for sample in d.get('samples', []):
+            rel = sample['path']
+            name = Path(rel).name
+            if name in preferred or Path(rel).suffix.lower() in {'.py','.js','.ts','.tsx','.jsx','.go','.rs','.java','.kt','.html'}:
+                priority.append(rel)
+        seen=set(); selected=[]
+        for rel in priority:
+            if rel not in seen:
+                seen.add(rel); selected.append(rel)
+            if len(selected) >= 8: break
+        if selected:
+            lines.append('KEY PROJECT FILE CONTENT:')
+            for rel in selected:
+                p=self.root/rel
+                try:
+                    text=p.read_text(encoding='utf-8')
+                except Exception:
+                    continue
+                if len(text)>3500: text=text[:3500]+'\n...[truncated]...'
+                lines.append(f'--- {rel} ---\n{text}')
         return '\n'.join(lines)

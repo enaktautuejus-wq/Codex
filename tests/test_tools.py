@@ -174,7 +174,7 @@ class FinalUpgradeTests(unittest.TestCase):
 
     def test_live_renderer_buffers_code(self):
         from codex.renderer import LiveMarkdownRenderer
-        import io, contextlib
+        import io, contextlib, re
         live = LiveMarkdownRenderer()
         buf = io.StringIO()
         with contextlib.redirect_stdout(buf):
@@ -183,7 +183,8 @@ class FinalUpgradeTests(unittest.TestCase):
             self.assertNotIn("<div>", buf.getvalue())
             live.feed("ok</div>\n```\nDone")
             live.finish()
-        self.assertIn("<div>ok</div>", buf.getvalue())
+        plain = re.sub(r"\x1b\[[0-9;]*m", "", buf.getvalue())
+        self.assertIn("<div>ok</div>", plain)
         self.assertIn("Done", buf.getvalue())
 
     def test_registry_has_verify_and_diff(self):

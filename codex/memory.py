@@ -1,4 +1,5 @@
 from __future__ import annotations
+import hashlib
 import json, os, re, time
 from pathlib import Path
 from typing import Any
@@ -6,10 +7,15 @@ from typing import Any
 class MemoryStore:
     def __init__(self, workspace: str, max_records: int = 2000):
         self.root = Path(workspace).resolve()
-        self.dir = self.root / '.codex'
-        self.path = self.dir / 'memory.jsonl'
+        home = Path(os.environ.get("CODEX_HOME", str(Path.home() / ".codex"))).expanduser().resolve()
+        project_id = hashlib.sha256(str(self.root).encode("utf-8")).hexdigest()[:20]
+        self.dir = home / "projects" / project_id
+        self.path = self.dir / "memory.jsonl"
+        self.meta_path = self.dir / "project.json"
         self.max_records = max_records
         self.dir.mkdir(parents=True, exist_ok=True)
+        if not self.meta_path.exists():
+            self.meta_path.write_text(json.dumps({"workspace": str(self.root)}, ensure_ascii=False, indent=2), encoding="utf-8")
 
     def add(self, kind: str, content: str, meta: dict[str, Any] | None = None) -> None:
         record = {'ts': int(time.time()), 'kind': kind, 'content': str(content), 'meta': meta or {}}

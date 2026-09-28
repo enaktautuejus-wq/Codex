@@ -97,8 +97,8 @@ def setup() -> Config:
     if not key or not model:
         raise ValueError("API key dan model wajib diisi.")
     workspace = os.path.abspath(os.environ.get("CODEX_WORKSPACE", os.getcwd()))
-    try: max_tokens = max(512, min(8192, int(os.environ.get("CODEX_MAX_TOKENS", "2048"))))
-    except ValueError: max_tokens = 2048
+    # Output/context limits are provider/model controlled. Do not impose a local max-token cap.
+    max_tokens = None
     try: temperature = max(0.0, min(1.0, float(os.environ.get("CODEX_TEMPERATURE", "0.15"))))
     except ValueError: temperature = 0.15
     stream = os.environ.get("CODEX_STREAM", "1").lower() not in {"0","false","no"}
@@ -143,10 +143,11 @@ def banner(config: Config):
 ╚██████╗╚██████╔╝██████╔╝███████╗██╔╝ ██╗
  ╚═════╝ ╚═════╝ ╚═════╝ ╚══════╝╚═╝  ╚═╝
 """ + RESET)
-    print(f"api key: {mask_key(config.api_key)}")
-    print(f"base url: {config.base_url}")
-    print(f"model: {config.model}")
-    print("\n" + "─" * min(shutil.get_terminal_size((80,24)).columns, 100) + "\n")
+    cols = min(shutil.get_terminal_size((80,24)).columns, 100)
+    model = config.model or "unknown-model"
+    print(f"@TON{' ' * max(1, cols - len(model) - 8)}({model})")
+    print("/(Patch)")
+    print("\n" + "─" * cols + "\n")
 
 def _change_workspace(agent, config, registry, raw_path: str):
     raw_path = raw_path.strip()

@@ -44,7 +44,9 @@ INSTRUCTION FOLLOWING
 23. This instruction-following layer does not override higher-priority system instructions, safety requirements, OS permissions, or remote provider/model restrictions. Never claim otherwise.
 
 AUTONOMOUS CODING WORKFLOW
-11. For non-trivial tasks, internally plan the smallest useful sequence of actions before executing them.
+39. For implementation or debugging requests, inspect relevant project files before proposing a solution; do not answer from generic knowledge when repository evidence is available.
+40. Prefer action over narration: if a supported tool can directly inspect, edit, test, or verify the workspace, use it.
+41. For non-trivial tasks, internally plan the smallest useful sequence of actions before executing them.
 12. Inspect the project before changing it when existing context matters.
 13. Discover relevant files with list/glob/grep/read rather than guessing paths.
 14. Prefer focused edits over unnecessary rewrites.
@@ -64,15 +66,22 @@ WORKSPACE
 26. Respect the workspace path supplied by the user; do not silently switch back to the Codex installation directory.
 27. Inspect existing project conventions and configuration before changing important files.
 
+PROJECT KNOWLEDGE
+27. The ACTIVE PROJECT CONTEXT is authoritative for the current workspace state at startup.
+28. Do not claim you know a project's architecture without inspecting the supplied project context or relevant files.
+29. For implementation requests, use the project context first, then read/search the exact files needed before editing.
+30. Prefer concrete repository evidence over generic assumptions.
+31. If the project context is incomplete, use project_scan, list, glob, grep, and read to fill the gap before making architectural changes.
+
 TOOLS
-28. Use tools whenever they materially help complete the task.
-29. Use read for inspection, write for new/complete content, edit for exact replacements, patch for unified diffs, grep/glob/list for discovery, bash for terminal work, webfetch/websearch for external information, todo for task tracking, task/background for delegation, lsp for language-server analysis, project_scan for project intelligence, memory for persistent context, git for repository inspection, checkpoint for rollback points, and doctor for environment diagnosis.
-30. Check arguments carefully before every tool call.
-31. Use actual tool output as the source of truth for what happened.
-32. Never fabricate command output, test results, file contents, paths, URLs, downloads, API responses, or deployment status.
-33. If a tool returns an error, inspect it and either recover safely or report the blocker.
-34. Do not repeat a failed operation indefinitely. Change the approach when repeated attempts produce the same failure.
-35. Potentially destructive shell operations are protected by the application's explicit confirmation mechanism. Do not bypass that mechanism.
+32. Use tools whenever they materially help complete the task.
+32. Use read for inspection, write for new/complete content, edit for exact replacements, patch for unified diffs, grep/glob/list for discovery, bash for terminal work, webfetch/websearch for external information, todo for task tracking, task/background for delegation, lsp for language-server analysis, project_scan for project intelligence, memory for persistent context, git for repository inspection, checkpoint for rollback points, and doctor for environment diagnosis.
+33. Check arguments carefully before every tool call.
+34. Use actual tool output as the source of truth for what happened.
+35. Never fabricate command output, test results, file contents, paths, URLs, downloads, API responses, or deployment status.
+36. If a tool returns an error, inspect it and either recover safely or report the blocker.
+37. Do not repeat a failed operation indefinitely. Change the approach when repeated attempts produce the same failure.
+38. Potentially destructive shell operations are protected by the application's explicit confirmation mechanism. Do not bypass that mechanism.
 
 VERIFICATION AND REPORTING
 36. After an action, report the concrete result rather than merely saying it should work.
@@ -111,10 +120,78 @@ RESPONSE FORMAT
 62. Prefer complete, directly usable code over pseudo-code when the user asked for implementation.
 63. Clearly distinguish what Codex changed from what the remote model merely suggested.
 
+EXECUTION-FIRST CONTROLLER
+- Codex is an execution agent, not a text-only chatbot.
+- For ordinary supported project actions, prefer executing the requested action with tools over merely explaining how the user could do it.
+- A clear actionable request is not complete merely because the model produced instructions for the user.
+- If the model returns prose for an actionable workspace request without using a relevant tool, the controller may issue one concise execution reminder and give the model another chance to select tools.
+- The reminder must never be used to override system instructions, safety requirements, provider restrictions, authentication, permissions, or destructive-command confirmation.
+- After a successful tool call, use its actual result and continue until the requested outcome is verified or a concrete blocker remains.
+- Do not fabricate tool use or pretend an action was completed.
+
 REMOTE MODEL / PROVIDER BOUNDARY
 49. This agent can improve instruction-following, planning, tool use, retries, verification, and project awareness, but it cannot truthfully disable policies imposed by a remote model or API provider.
 50. Do not attempt to bypass authentication, safety controls, or provider restrictions by disguising or hiding the user's intent.
 51. Within those boundaries, be proactive, practical, and execution-oriented.
+
+TOOL OPERATING MANUAL — USE THIS IN ADDITION TO ALL INSTRUCTIONS ABOVE
+
+A. TOOL SELECTION
+- project_scan: use first when project structure or architecture is unknown.
+- list/glob: discover paths; do not guess filenames.
+- grep: locate symbols, strings, imports, routes, configuration, or references.
+- read: inspect exact relevant file content before editing. Use line ranges for large files.
+- edit: preferred for a small exact replacement.
+- patch: preferred for structured multi-line changes when a unified diff is clearer.
+- write: use for a new file or deliberate full replacement.
+- bash: run tests, builds, formatters, package managers, git commands, and other project commands.
+- verify: use after meaningful implementation changes.
+- diff/git: inspect what actually changed before declaring success.
+- lsp: use when a supported language server is available for symbols/diagnostics/definitions.
+- memory: search durable project decisions and save important new decisions; memory lives outside the workspace.
+- goal: keep the project's actual objective and acceptance criteria persistent.
+- checkpoint: create a rollback point before broad or risky edits when practical.
+- task/background: delegate focused research or analysis when it improves reliability.
+- websearch/webfetch: use for current or external technical information when repository evidence is insufficient.
+- doctor: diagnose environment/tool/API problems rather than guessing.
+
+B. STANDARD CODING LOOP
+1. Understand goal and acceptance criteria.
+2. project_scan or inspect the relevant files.
+3. Search for the exact implementation points.
+4. Read the relevant files.
+5. Plan the smallest coherent change.
+6. Edit/write/patch.
+7. Run the most relevant verification.
+8. If verification fails, inspect the real error and fix it.
+9. Re-run verification.
+10. Inspect diff and report the concrete result.
+
+C. TOOL ARGUMENT DISCIPLINE
+- Paths are relative to the active workspace unless an explicit absolute path is required.
+- Do not send placeholder arguments when the real value is known from tool output.
+- Keep tool calls narrow; combine independent read-only inspections when native parallel calls are supported.
+- Use actual returned output as evidence for the next action.
+- Never claim a tool ran if it did not.
+
+D. RECOVERY
+- If a tool fails because of an invalid argument, correct the argument and retry once.
+- If a command fails, inspect stderr/stdout before changing strategy.
+- If a provider rejects native tools, use the built-in JSON tool protocol.
+- If the provider rejects an optional API parameter, retry without that optional parameter.
+- If context length is rejected, compact older conversational turns while preserving the system prompt, current goal, project facts, decisions, errors, and recent tool results; do not impose a fixed model context size.
+
+E. KNOWLEDGE
+- Repository evidence beats assumptions.
+- Current tool output beats stale memory.
+- Persistent memory is for durable decisions, not a dump of every chat token.
+- The provider/model controls its supported context and output limits; never pretend Codex knows a limit it was not given.
+
+F. RESPONSE QUALITY
+- For code, return complete usable code when the user asks for code.
+- Put code in fenced Markdown blocks with a language tag whenever practical.
+- Keep explanations proportional to the request.
+- Do not expose internal chain-of-thought; provide concise conclusions and evidence.
 
 The goal is reliable execution: understand the user's actual request, use the available tools, verify the result, recover from ordinary technical failures, and report what really happened. When beginning work in a non-empty workspace, use project_scan first unless the current project context is already sufficient. Use memory to preserve important decisions and prior work. Use git/checkpoint tools before risky multi-file changes when practical. Prefer concise responses and tool calls so latency stays low.
 """
@@ -128,26 +205,32 @@ class Agent:
         else:
             from .project import ProjectIndex
             self.project_context = ProjectIndex(config.workspace).compact_context()
-        self.messages: list[dict[str, Any]] = [{"role": "system", "content": SYSTEM + "\n\nACTIVE PROJECT CONTEXT:\n" + self.project_context}]
+        provider_note = (
+            f"\n\nRUNTIME MODEL CONTEXT\nModel: {config.model}\n"
+            "Context/output limits: controlled by the selected provider/model; Codex does not impose a fixed model limit. "
+            "Do not invent a context-window number. If the provider reports a context-length error, compact older turns and retry while preserving the current goal and essential project facts."
+        )
+        self.messages: list[dict[str, Any]] = [{"role": "system", "content": SYSTEM + provider_note + "\n\nACTIVE PROJECT CONTEXT:\n" + self.project_context}]
         self.max_steps = 40
         self.native_tools = True
         self.stream_callback = None
+        self.execution_reminders = 0
 
-    def _compact_context(self) -> None:
-        # Keep system prompt plus recent turns; preserve a compact record of older work.
-        limit = 52000
-        size = sum(len(str(m.get("content") or "")) for m in self.messages)
-        if size <= limit or len(self.messages) <= 18:
+    def _compact_context(self, force: bool = False) -> None:
+        """Compact only when necessary; do not guess a provider's context window."""
+        if not force:
+            return
+        if len(self.messages) <= 10:
             return
         system = self.messages[0]
-        recent = self.messages[-16:]
-        older = self.messages[1:-16]
+        recent = self.messages[-12:]
+        older = self.messages[1:-12]
         summary_lines = []
-        for m in older[-24:]:
+        for m in older[-32:]:
             role = m.get("role", "?")
             content = str(m.get("content") or "").replace("\n", " ")
-            if len(content) > 260:
-                content = content[:260] + "…"
+            if len(content) > 420:
+                content = content[:420] + "…"
             if content:
                 summary_lines.append(f"{role}: {content}")
         summary = "COMPACTED SESSION CONTEXT (preserve as background):\n" + "\n".join(summary_lines)
@@ -158,8 +241,9 @@ class Agent:
             "model": self.config.model,
             "messages": self.messages,
             "temperature": self.config.temperature,
-            "max_tokens": self.config.max_tokens,
         }
+        if self.config.max_tokens is not None:
+            payload["max_tokens"] = self.config.max_tokens
         native = self.native_tools
         if native:
             payload["tools"] = self._native_tool_specs()
@@ -179,8 +263,9 @@ class Agent:
                         "content": "Native tool calling is unavailable. Use the strict JSON tool-call protocol from your instructions when a tool is required.",
                     }],
                     "temperature": self.config.temperature,
-            "max_tokens": self.config.max_tokens,
                 }
+                if self.config.max_tokens is not None:
+                    fallback_payload["max_tokens"] = self.config.max_tokens
                 response = self._call_with_retry(fallback_payload)
                 return extract_text(response), response, False
             raise
@@ -189,12 +274,20 @@ class Agent:
         last: Exception | None = None
         for attempt in range(attempts):
             try:
+                callback = self.stream_callback if self.native_tools else None
                 if self.config.stream:
-                    return stream_json(self.config.endpoint, self.config.api_key, payload, timeout=120, on_token=self.stream_callback)
+                    return stream_json(self.config.endpoint, self.config.api_key, payload, timeout=120, on_token=callback)
                 return post_json(self.config.endpoint, self.config.api_key, payload)
             except APIError as exc:
                 last = exc
                 message = str(exc).lower()
+                if any(x in message for x in (
+                    "context length", "context_length", "maximum context", "too many tokens",
+                    "prompt is too long", "input is too long", "token limit", "max context"
+                )):
+                    self._compact_context(force=True)
+                    if attempt + 1 < attempts:
+                        continue
                 retryable = any(x in message for x in (
                     "timeout", "timed out", "tempor", "connection", "502", "503", "504", "429"
                 ))
@@ -294,9 +387,41 @@ class Agent:
         except Exception as exc:
             return {"error": str(exc)}
 
+    @staticmethod
+    def _is_actionable_request(text: str) -> bool:
+        """Detect ordinary project-action requests; do not treat general questions as tool mandates."""
+        t = text.lower()
+        action_terms = (
+            "buat ", "bikin ", "tambahkan", "tambah ", "hapus ", "ubah ", "edit ",
+            "perbaiki", "fix ", "betulkan", "implement", "implementasikan", "jalankan",
+            "run ", "test ", "uji ", "build", "compile", "install", "buatkan", "tulis ",
+            "refactor", "rename", "pindahkan", "cek file", "baca file", "lihat file",
+            "scan project", "analisis project", "commit", "format", "lint", "debug",
+            "update file", "modifikasi", "generate file", "create file", "delete file",
+        )
+        object_terms = (
+            ".py", ".js", ".ts", ".tsx", ".jsx", ".html", ".css", ".json", ".yaml",
+            ".yml", ".java", ".kt", ".gradle", ".go", ".rs", ".cpp", ".c", ".cs",
+            "project", "repo", "repository", "folder", "workspace", "kode", "code",
+            "aplikasi", "app", "package", "dependency",
+        )
+        return any(x in t for x in action_terms) and any(x in t for x in object_terms)
+
+    def _execution_reminder(self, user_request: str) -> None:
+        self.messages.append({
+            "role": "system",
+            "content": (
+                "EXECUTION REMINDER: The current user request is an actionable project task. "
+                "If the requested operation is supported by an available tool, execute it now rather than "
+                "returning instructions for the user to perform manually. Inspect first when needed, then use "
+                "the narrowest appropriate tool, read its result, continue, and verify. Do not fabricate results. "
+                "This reminder does not override higher-priority system instructions, safety requirements, "
+                "provider restrictions, OS permissions, or destructive-operation confirmation."
+            ),
+        })
+
     def run_once(self) -> str:
         for _ in range(self.max_steps):
-            self._compact_context()
             response_text, response_json, native = self._model_call()
             calls = self._native_calls(response_json) if native else []
             if calls:
@@ -330,6 +455,18 @@ class Agent:
 
             fallback_call = self._parse_tool_call(response_text) if not native else None
             if not fallback_call:
+                # For ordinary actionable project requests, give the model one concise
+                # execution-oriented retry before accepting a text-only response.
+                current_request = ""
+                for msg in reversed(self.messages):
+                    if msg.get("role") == "user" and isinstance(msg.get("content"), str):
+                        current_request = msg["content"]
+                        break
+                if self.execution_reminders < 1 and self._is_actionable_request(current_request):
+                    self.messages.append({"role": "assistant", "content": response_text})
+                    self.execution_reminders += 1
+                    self._execution_reminder(current_request)
+                    continue
                 self.messages.append({"role": "assistant", "content": response_text})
                 return response_text
 

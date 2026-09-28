@@ -74,3 +74,18 @@ The application does not add a keyword-based refusal layer. It cannot disable or
 python -m unittest discover -s tests -v
 python -m compileall -q .
 ```
+
+## Storage & provider limits
+
+- Codex does not impose a fixed model context/output-token limit. The selected provider/model controls those limits.
+- If the provider reports a context-length error, Codex compacts older conversation turns and retries while preserving the system prompt, current goal, project facts, decisions, and recent tool results.
+- Persistent AI memory is stored outside the active workspace by default at `~/.codex/projects/<project-id>/memory.jsonl` (override the root with `CODEX_HOME`).
+- The banner intentionally does not display the API key or Base URL. It shows the model as `@TON (MODEL)` and `/ (Patch)`.
+
+## Faster streaming
+
+The SSE reader uses incremental reads instead of waiting for large buffered chunks. Native tool calls can stream normally; the JSON fallback tool protocol is kept off the live UI so tool JSON does not appear as messy assistant output.
+
+## Code rendering
+
+Markdown fenced blocks are rendered as terminal code panels with language detection, syntax coloring, line numbers, and optional folding. Completed code fences are rendered exactly once during streaming, preventing HTML/CSS/JavaScript/etc. from leaking out as raw text.
