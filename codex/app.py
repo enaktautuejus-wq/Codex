@@ -37,4 +37,11 @@ def main():
     index = registry.project.scan()
     print(f"Analisis selesai: {index['files']} file, {index['directories']} folder.")
     agent = Agent(config, registry)
-    run_ui(agent, config, registry)
+    try:
+        run_ui(agent, config, registry)
+    except KeyboardInterrupt:
+        print()
+    finally:
+        # ui.run_ui normally restores this; repeat defensively so Ctrl+C never
+        # leaves Termux in an alternate/raw-looking terminal state.
+        print("\033[0m\033[?1049l", end="", flush=True)

@@ -89,3 +89,10 @@ The SSE reader uses incremental reads instead of waiting for large buffered chun
 ## Code rendering
 
 Markdown fenced blocks are rendered as terminal code panels with language detection, syntax coloring, line numbers, and optional folding. Completed code fences are rendered exactly once during streaming, preventing HTML/CSS/JavaScript/etc. from leaking out as raw text.
+
+
+### V5 fixes
+- Codex uses the terminal alternate screen and restores it on exit/Ctrl+C.
+- Explicit file/folder deletion is available through the `delete` tool for user-requested paths, including absolute paths, with confirmation protection.
+- When a user asks to create/modify files, the agent is instructed to execute filesystem tools instead of merely printing code, with up to three execution reminders.
+- Tool results are persisted as compact memory events outside the workspace.

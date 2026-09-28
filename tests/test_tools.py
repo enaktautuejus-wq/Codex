@@ -200,3 +200,38 @@ class FinalUpgradeTests(unittest.TestCase):
             Path(td,'ok.py').write_text('x = 1\n')
             result=ToolRegistry(td).call('verify', {})
             self.assertTrue(result['ok'])
+
+class V5FixTests(unittest.TestCase):
+    def test_delete_absolute_file_requires_confirmation(self):
+        from codex.tools import delete_path, ToolError
+        with tempfile.TemporaryDirectory() as td:
+            p = Path(td) / 'remove-me.txt'
+            p.write_text('x')
+            with self.assertRaises(ToolError):
+                delete_path(str(p), confirm='')
+            self.assertTrue(p.exists())
+            result = delete_path(str(p), confirm='DELETE')
+            self.assertIn('deleted', result)
+            self.assertFalse(p.exists())
+
+    def test_delete_recursive_directory(self):
+        from codex.tools import delete_path
+        with tempfile.TemporaryDirectory() as td:
+            d = Path(td) / 'folder'
+            d.mkdir(); (d / 'a.txt').write_text('x')
+            result = delete_path(str(d), recursive=True, confirm='DELETE')
+            self.assertIn('deleted directory', result)
+            self.assertFalse(d.exists())
+
+    def test_registry_exposes_delete_tool(self):
+        from codex.tools import ToolRegistry
+        with tempfile.TemporaryDirectory() as td:
+            spec = {x['name']: x for x in ToolRegistry(td).specs()}
+            self.assertIn('delete', spec)
+            self.assertIn('confirm', spec['delete']['parameters'])
+
+    def test_actionable_file_request_detection(self):
+        from codex.agent import Agent
+        self.assertTrue(Agent._is_actionable_request('buat file index.html'))
+        self.assertTrue(Agent._is_actionable_request('hapus folder build'))
+        self.assertFalse(Agent._is_actionable_request('apa itu python?'))

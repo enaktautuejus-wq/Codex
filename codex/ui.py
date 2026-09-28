@@ -16,6 +16,8 @@ CYAN = "\033[96m"
 DIM = "\033[2m"
 RESET = "\033[0m"
 CLEAR = "\033[2J\033[H"
+ALT_ENTER = "\033[?1049h\033[H"
+ALT_EXIT = "\033[?1049l"
 
 def clear():
     print(CLEAR, end="")
@@ -185,6 +187,10 @@ def copy_text_to_clipboard(text: str) -> str:
 
 
 def run_ui(agent, config, registry):
+    # Use the terminal alternate screen so scrolling/keyboard interaction stays
+    # inside Codex instead of exposing the Termux shell's previous output.
+    sys.stdout.write(ALT_ENTER)
+    sys.stdout.flush()
     clear()
     banner(config)
     last_answer = ""
@@ -228,6 +234,12 @@ def run_ui(agent, config, registry):
             agent.stream_callback = on_token
             try:
                 answer = agent.run(text)
+            except KeyboardInterrupt:
+                # Ctrl+C cancels the current operation and exits Codex cleanly.
+                agent.stream_callback = None
+                sys.stdout.write("\n\033[0m")
+                sys.stdout.flush()
+                break
             finally:
                 agent.stream_callback = None
             last_answer = "".join(streamed) if streamed else answer
@@ -235,5 +247,9 @@ def run_ui(agent, config, registry):
                 live.finish(answer)
             else:
                 print(render_markdown(answer)); print()
+        except KeyboardInterrupt:
+            break
         except Exception as exc:
             print(f"{RED}API/tool error:{RESET} {exc}\n")
+    sys.stdout.write("\033[0m" + ALT_EXIT)
+    sys.stdout.flush()
