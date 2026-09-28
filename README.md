@@ -8,7 +8,7 @@ OpenAI-compatible terminal coding/project agent for Termux. Python standard libr
 pkg update
 pkg install python git ripgrep
 termux-setup-storage
-git clone https://github.com/enaktautuejus-wq/Codex.git
+git clone <your-repository>.git
 cd Codex
 python codex.py
 ```
@@ -105,3 +105,6 @@ Markdown fenced blocks are rendered as terminal code panels with language detect
 - Runtime telemetry reports request count, provider-reported token usage, latency, and rate-limit headers when available.
 - Context/output limits are not hard-coded by Codex; provider/model limits and provider errors drive compaction/retry behavior.
 - Verification is task-aware and is not forced for non-build/non-test work.
+
+## V8 package note
+This V8 archive is a verified repackaging of the latest JACK V7 build. The previous V8 download artifact was missing; this archive fixes the download/package issue.
