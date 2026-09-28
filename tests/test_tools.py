@@ -201,37 +201,56 @@ class FinalUpgradeTests(unittest.TestCase):
             result=ToolRegistry(td).call('verify', {})
             self.assertTrue(result['ok'])
 
-class V5FixTests(unittest.TestCase):
-    def test_delete_absolute_file_requires_confirmation(self):
-        from codex.tools import delete_path, ToolError
+class RegressionFixTests(unittest.TestCase):
+    def test_live_renderer_does_not_leak_partial_fence(self):
+        from codex.renderer import LiveMarkdownRenderer
+        import io, contextlib, re
+        live = LiveMarkdownRenderer()
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            live.feed("Intro\n`")
+            live.feed("``html\n<div>")
+            self.assertNotIn("<div>", buf.getvalue())
+            live.feed("ok</div>\n``\nDone")
+            live.finish()
+        plain = re.sub(r"\x1b\[[0-9;]*m", "", buf.getvalue())
+        self.assertIn("┌─ html", plain)
+        self.assertIn("<div>ok</div>", plain)
+        self.assertIn("Done", plain)
+
+    def test_delete_explicit_absolute_path(self):
+        from codex.tools import delete_path
         with tempfile.TemporaryDirectory() as td:
-            p = Path(td) / 'remove-me.txt'
-            p.write_text('x')
-            with self.assertRaises(ToolError):
-                delete_path(str(p), confirm='')
-            self.assertTrue(p.exists())
-            result = delete_path(str(p), confirm='DELETE')
-            self.assertIn('deleted', result)
-            self.assertFalse(p.exists())
+            target = Path(td) / "delete-me.txt"
+            target.write_text("x")
+            pending = delete_path(str(target), confirmed=False)
+            self.assertTrue(pending["confirmation_required"])
+            result = delete_path(str(target), confirmed=True)
+            self.assertTrue(result["deleted"])
+            self.assertFalse(target.exists())
 
     def test_delete_recursive_directory(self):
         from codex.tools import delete_path
         with tempfile.TemporaryDirectory() as td:
-            d = Path(td) / 'folder'
-            d.mkdir(); (d / 'a.txt').write_text('x')
-            result = delete_path(str(d), recursive=True, confirm='DELETE')
-            self.assertIn('deleted directory', result)
-            self.assertFalse(d.exists())
+            target = Path(td) / "folder"
+            (target / "nested").mkdir(parents=True)
+            (target / "nested" / "a.txt").write_text("x")
+            result = delete_path(str(target), recursive=True, confirmed=True)
+            self.assertTrue(result["deleted"])
+            self.assertFalse(target.exists())
 
-    def test_registry_exposes_delete_tool(self):
-        from codex.tools import ToolRegistry
+    def test_global_config_roundtrip(self):
+        from codex.config import Config, save_config, load_saved_config
         with tempfile.TemporaryDirectory() as td:
-            spec = {x['name']: x for x in ToolRegistry(td).specs()}
-            self.assertIn('delete', spec)
-            self.assertIn('confirm', spec['delete']['parameters'])
-
-    def test_actionable_file_request_detection(self):
-        from codex.agent import Agent
-        self.assertTrue(Agent._is_actionable_request('buat file index.html'))
-        self.assertTrue(Agent._is_actionable_request('hapus folder build'))
-        self.assertFalse(Agent._is_actionable_request('apa itu python?'))
+            old = os.environ.get("CODEX_HOME")
+            os.environ["CODEX_HOME"] = td
+            try:
+                cfg = Config("https://example.com/v1", "secret-key", "model-x", "/tmp/project")
+                save_config(cfg)
+                loaded = load_saved_config("/tmp/other")
+                self.assertEqual(loaded.base_url, cfg.base_url)
+                self.assertEqual(loaded.api_key, cfg.api_key)
+                self.assertEqual(loaded.model, cfg.model)
+            finally:
+                if old is None: os.environ.pop("CODEX_HOME", None)
+                else: os.environ["CODEX_HOME"] = old

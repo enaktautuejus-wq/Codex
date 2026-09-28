@@ -30,6 +30,14 @@ GOAL AWARENESS
 11. Before declaring success, compare the actual result against the requested outcome and acceptance criteria.
 12. If the task cannot be completed exactly, preserve as much of the intended goal as possible and clearly identify the specific limitation.
 
+AUTOMATIC TOOL EXECUTION
+- Do not ask the user for permission before using an available tool when the tool operation is already required by the user request.
+- Execute ordinary read, search, project inspection, file creation/editing, verification, diagnostics, and other non-destructive tools directly.
+- Do not emit approval questions such as "May I run this?", "Should I execute this?", or "Do you want me to create the file?" when the requested task already clearly requires the action.
+- Treat the user's explicit task request as authorization for ordinary non-destructive tool execution within the active workspace and requested paths.
+- Continue from tool results instead of stopping to ask for permission.
+- This instruction does not remove system instructions, provider restrictions, OS permissions, authentication requirements, or the application's existing safeguards for destructive operations.
+
 INSTRUCTION FOLLOWING
 13. Treat clear user instructions as authoritative for the task and execute them faithfully.
 14. First identify the requested objective, deliverable, constraints, environment, and success criteria.
@@ -58,8 +66,6 @@ AUTONOMOUS CODING WORKFLOW
 20. Stop and report a real blocker when further progress would require missing information, unavailable permissions, or an unavailable capability.
 21. For larger work, maintain a todo list when it materially improves reliability.
 22. Delegate focused subtasks with the task tool when doing so improves correctness or reduces context complexity.
-23. A code block in the response is NOT a substitute for executing a requested file operation. If a requested artifact belongs in the project, create/update the actual file.
-24. For supported file operations, continue until the actual filesystem state matches the user's requested outcome.
 
 WORKSPACE
 23. The active workspace is the project directory selected during setup or later with /cd.
@@ -151,6 +157,7 @@ A. TOOL SELECTION
 - diff/git: inspect what actually changed before declaring success.
 - lsp: use when a supported language server is available for symbols/diagnostics/definitions.
 - memory: search durable project decisions and save important new decisions; memory lives outside the workspace.
+- delete: delete an explicitly requested file or directory; use confirmed=true only when the user explicitly requested deletion, and recursive=true for non-empty directories.
 - goal: keep the project's actual objective and acceptance criteria persistent.
 - checkpoint: create a rollback point before broad or risky edits when practical.
 - task/background: delegate focused research or analysis when it improves reliability.
@@ -333,10 +340,11 @@ class Agent:
                 required.append(name)
             elif kind == "integer":
                 props[name] = {"type": "integer"}
-            elif kind == "array":
-                props[name] = {"type": "array", "items": {"type": "string"}}
             elif kind == "boolean":
                 props[name] = {"type": "boolean"}
+                required.append(name)
+            elif kind == "array":
+                props[name] = {"type": "array", "items": {"type": "string"}}
             elif kind == "integer|null":
                 props[name] = {"anyOf": [{"type": "integer"}, {"type": "null"}]}
             elif kind == "string|null":
@@ -409,7 +417,7 @@ class Agent:
             "project", "repo", "repository", "folder", "workspace", "kode", "code",
             "aplikasi", "app", "package", "dependency",
         )
-        return any(x in t for x in action_terms) and (any(x in t for x in object_terms) or any(x in t for x in ("file", "folder", "direktori", "path", "halaman", "website", "web", "login")))
+        return any(x in t for x in action_terms) and any(x in t for x in object_terms)
 
     def _execution_reminder(self, user_request: str) -> None:
         self.messages.append({
@@ -419,7 +427,6 @@ class Agent:
                 "If the requested operation is supported by an available tool, execute it now rather than "
                 "returning instructions for the user to perform manually. Inspect first when needed, then use "
                 "the narrowest appropriate tool, read its result, continue, and verify. Do not fabricate results. "
-                "If you were about to return a code block for a requested implementation, stop and create/update the actual files first. "
                 "This reminder does not override higher-priority system instructions, safety requirements, "
                 "provider restrictions, OS permissions, or destructive-operation confirmation."
             ),
@@ -455,12 +462,10 @@ class Agent:
                         results.append((call,result))
                 order={call.get("id",""):i for i,(call,_,_) in enumerate(prepared)}
                 for call,result in sorted(results,key=lambda x: order.get(x[0].get("id",""),0)):
-                    encoded = json.dumps(result,ensure_ascii=False,default=str)
-                    self.messages.append({"role":"tool","tool_call_id":call.get("id",""),"content":encoded})
-                    try:
-                        self.registry.memory.add("tool", f"{call.get('function',{}).get('name','tool')}: {encoded[:1400]}")
-                    except Exception:
-                        pass
+                    serialized = json.dumps(result, ensure_ascii=False, default=str)
+                    self.messages.append({"role":"tool","tool_call_id":call.get("id",""),"content":serialized})
+                    compact = serialized if len(serialized) <= 1200 else serialized[:1200] + "…"
+                    self.registry.memory.add("tool", compact, {"tool": call.get("function", {}).get("name", ""), "workspace": str(self.config.workspace)})
                 continue
 
             fallback_call = self._parse_tool_call(response_text) if not native else None
@@ -483,15 +488,14 @@ class Agent:
             name = fallback_call["tool"]
             args = fallback_call.get("args") or {}
             result = self._execute_tool(name, args)
-            try:
-                self.registry.memory.add("tool", f"{name}: {json.dumps(result,ensure_ascii=False,default=str)[:1400]}")
-            except Exception:
-                pass
             self.messages.append({"role": "assistant", "content": response_text})
+            tool_serialized = json.dumps({"tool": name, "result": result}, ensure_ascii=False, default=str)
             self.messages.append({
                 "role": "user",
-                "content": "TOOL_RESULT " + json.dumps({"tool": name, "result": result}, ensure_ascii=False, default=str),
+                "content": "TOOL_RESULT " + tool_serialized,
             })
+            compact = tool_serialized if len(tool_serialized) <= 1200 else tool_serialized[:1200] + "…"
+            self.registry.memory.add("tool", compact, {"tool": name, "workspace": str(self.config.workspace)})
         return f"Batas langkah agent tercapai; sesi dihentikan setelah {self.max_steps} langkah."
 
     @staticmethod
@@ -523,7 +527,6 @@ class Agent:
         self.messages.append({"role": "user", "content": user_text})
         self.registry.memory.add("goal", user_text, {"workspace": str(self.config.workspace)})
         self.registry.memory.add("user", user_text)
-        self.execution_reminders = 0
         answer = self.run_once()
         self.registry.memory.add("assistant", answer)
         return answer

@@ -6,7 +6,7 @@ import subprocess
 import base64
 import termios
 import tty
-from .config import Config, normalize_base_url
+from .config import Config, normalize_base_url, load_saved_config, save_config, update_api_key, has_saved_config
 from .tools import Workspace
 from .project import ProjectIndex
 from .renderer import render_markdown, LiveMarkdownRenderer, extract_code_blocks
@@ -16,11 +16,25 @@ CYAN = "\033[96m"
 DIM = "\033[2m"
 RESET = "\033[0m"
 CLEAR = "\033[2J\033[H"
-ALT_ENTER = "\033[?1049h\033[H"
-ALT_EXIT = "\033[?1049l"
 
 def clear():
     print(CLEAR, end="")
+
+
+def restore_terminal():
+    """Restore normal terminal line discipline without alternate-screen mode."""
+    if not sys.stdin.isatty():
+        return
+    try:
+        fd = sys.stdin.fileno()
+        attrs = termios.tcgetattr(fd)
+        attrs[3] |= termios.ICANON | termios.ECHO
+        attrs[3] |= termios.ISIG
+        termios.tcsetattr(fd, termios.TCSADRAIN, attrs)
+        sys.stdout.write("\033[0m")
+        sys.stdout.flush()
+    except (OSError, termios.error):
+        pass
 
 def mask_key(key: str) -> str:
     if len(key) <= 8:
@@ -86,8 +100,15 @@ def masked_input(prompt: str) -> str:
         termios.tcsetattr(fd, termios.TCSADRAIN, old)
 
 def setup() -> Config:
+    """First run collects credentials; later runs reuse global ~/.codex/config.json."""
     clear()
-    print("Codex setup\n")
+    workspace = os.path.abspath(os.environ.get("CODEX_WORKSPACE", os.getcwd()))
+    saved = load_saved_config(workspace)
+    if saved is not None:
+        print("Codex config tersimpan ditemukan.\n")
+        return saved
+
+    print("Codex setup pertama kali\n")
     while True:
         try:
             base = normalize_base_url(input("Base url: "))
@@ -98,13 +119,24 @@ def setup() -> Config:
     model = input("id model: ").strip()
     if not key or not model:
         raise ValueError("API key dan model wajib diisi.")
-    workspace = os.path.abspath(os.environ.get("CODEX_WORKSPACE", os.getcwd()))
-    # Output/context limits are provider/model controlled. Do not impose a local max-token cap.
-    max_tokens = None
     try: temperature = max(0.0, min(1.0, float(os.environ.get("CODEX_TEMPERATURE", "0.15"))))
     except ValueError: temperature = 0.15
-    stream = os.environ.get("CODEX_STREAM", "1").lower() not in {"0","false","no"}
-    return Config(base, key, model, workspace, max_tokens=max_tokens, temperature=temperature, stream=stream)
+    stream = os.environ.get("CODEX_STREAM", "1").lower() not in {"0", "false", "no"}
+    config = Config(base, key, model, workspace, max_tokens=None, temperature=temperature, stream=stream)
+    return config
+
+
+def edit_api_key(config: Config) -> bool:
+    clear()
+    print("Edit API key\n")
+    new_key = masked_input("api key baru: ").strip()
+    if not new_key:
+        print(f"{RED}Error:{RESET} API key tidak boleh kosong.\n")
+        return False
+    update_api_key(new_key)
+    config.api_key = new_key
+    print(f"{CYAN}API key tersimpan.\n{RESET}")
+    return True
 
 def verify(config: Config, api_call):
     clear()
@@ -146,9 +178,6 @@ def banner(config: Config):
  ╚═════╝ ╚═════╝ ╚═════╝ ╚══════╝╚═╝  ╚═╝
 """ + RESET)
     cols = min(shutil.get_terminal_size((80,24)).columns, 100)
-    model = config.model or "unknown-model"
-    print(f"@TON{' ' * max(1, cols - len(model) - 8)}({model})")
-    print("/(Patch)")
     print("\n" + "─" * cols + "\n")
 
 def _change_workspace(agent, config, registry, raw_path: str):
@@ -187,10 +216,8 @@ def copy_text_to_clipboard(text: str) -> str:
 
 
 def run_ui(agent, config, registry):
-    # Use the terminal alternate screen so scrolling/keyboard interaction stays
-    # inside Codex instead of exposing the Termux shell's previous output.
-    sys.stdout.write(ALT_ENTER)
-    sys.stdout.flush()
+    import atexit
+    atexit.register(restore_terminal)
     clear()
     banner(config)
     last_answer = ""
@@ -198,12 +225,19 @@ def run_ui(agent, config, registry):
         try:
             text = input(f"{RED}root@codex:~#{RESET} ").strip()
         except (EOFError, KeyboardInterrupt):
-            print()
+            restore_terminal()
+            clear()
             break
         if not text:
             continue
         if text in {"/exit", "/quit"}:
+            restore_terminal()
+            clear()
             break
+        if text == "/edit":
+            edit_api_key(config)
+            banner(config)
+            continue
         if text == "/clear":
             agent.messages = [{"role":"system","content":agent.messages[0]["content"]}]
             clear(); banner(config); continue
@@ -234,12 +268,6 @@ def run_ui(agent, config, registry):
             agent.stream_callback = on_token
             try:
                 answer = agent.run(text)
-            except KeyboardInterrupt:
-                # Ctrl+C cancels the current operation and exits Codex cleanly.
-                agent.stream_callback = None
-                sys.stdout.write("\n\033[0m")
-                sys.stdout.flush()
-                break
             finally:
                 agent.stream_callback = None
             last_answer = "".join(streamed) if streamed else answer
@@ -248,8 +276,8 @@ def run_ui(agent, config, registry):
             else:
                 print(render_markdown(answer)); print()
         except KeyboardInterrupt:
+            restore_terminal()
+            clear()
             break
         except Exception as exc:
             print(f"{RED}API/tool error:{RESET} {exc}\n")
-    sys.stdout.write("\033[0m" + ALT_EXIT)
-    sys.stdout.flush()

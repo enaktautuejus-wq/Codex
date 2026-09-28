@@ -1,7 +1,7 @@
 from __future__ import annotations
 import os
 from .api import post_json
-from .config import Config
+from .config import Config, has_saved_config, save_config
 from .ui import setup, verify, choose_workspace, run_ui
 from .tools import ToolRegistry
 from .agent import Agent
@@ -9,6 +9,7 @@ from .project import ProjectIndex
 
 
 def main():
+    first_run = not has_saved_config()
     config = setup()
 
     def verification():
@@ -24,9 +25,12 @@ def main():
             timeout=30,
         )
 
-    verify(config, verification)
+    if first_run:
+        verify(config, verification)
+        save_config(config)
+        print("Konfigurasi tersimpan di ~/.codex/config.json")
 
-    # Choose the actual project/work directory only after API verification.
+    # Choose the actual project/work directory only after first-run setup.
     workspace = choose_workspace()
     config.workspace = workspace
     os.chdir(workspace)
@@ -37,11 +41,4 @@ def main():
     index = registry.project.scan()
     print(f"Analisis selesai: {index['files']} file, {index['directories']} folder.")
     agent = Agent(config, registry)
-    try:
-        run_ui(agent, config, registry)
-    except KeyboardInterrupt:
-        print()
-    finally:
-        # ui.run_ui normally restores this; repeat defensively so Ctrl+C never
-        # leaves Termux in an alternate/raw-looking terminal state.
-        print("\033[0m\033[?1049l", end="", flush=True)
+    run_ui(agent, config, registry)

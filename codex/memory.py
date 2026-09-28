@@ -55,10 +55,19 @@ class MemoryStore:
         return [r for _,r in scored[:limit]]
 
     def context(self, query: str, limit: int = 6) -> str:
-        rows=self.search(query, limit)
-        if not rows: return ''
+        # Combine semantic-ish keyword matches with a small recent tail so
+        # recent tool results/decisions remain visible even when the current
+        # wording does not share the same keywords. Deduplicate by timestamp/content.
+        rows = self.search(query, limit)
+        recent = self.recent(min(4, limit))
+        merged=[]; seen=set()
+        for r in rows + recent:
+            key=(r.get('ts'), r.get('kind'), r.get('content'))
+            if key in seen: continue
+            seen.add(key); merged.append(r)
+        if not merged: return ''
         lines=[]
-        for r in rows:
+        for r in merged[:limit+4]:
             content=r.get('content','').strip().replace('\n',' ')
             if len(content)>700: content=content[:700]+'…'
             lines.append(f"[{r.get('kind','memory')}] {content}")

@@ -15,20 +15,30 @@ python codex.py
 
 ## Startup
 
+### First run
+
 1. Enter Base URL, API key, and model ID.
-2. API is verified.
-3. Enter the real project/workspace path, for example `/storage/emulated/0/Projects/MyProject`.
-4. Codex changes into that directory and scans the project before the interactive screen opens.
-5. If the directory is empty, the scan is effectively instant and the agent can start.
+2. API is verified once.
+3. Credentials are saved globally in `~/.codex/config.json` (mode 600 when supported).
+4. Enter the project/workspace path, for example `/storage/emulated/0/Projects/MyProject`.
+5. Codex changes into that directory and scans the project before the interactive screen opens.
+
+### Later runs
+
+1. Saved Base URL/API key/model are reused automatically.
+2. Only enter the project/workspace path.
+3. Codex opens the home screen.
+
+Use `/edit` inside Codex to edit the saved API key.
 
 ## Built-in agent capabilities
 
-- read/write/edit/patch/grep/glob/list
+- read/write/edit/patch/delete/grep/glob/list
 - bash with destructive-command confirmation
 - webfetch/websearch
 - todo/task/background jobs
 - project indexing and project scan
-- persistent deep local memory in `.codex/memory.jsonl`
+- persistent project/session memory outside the workspace at `~/.codex/projects/<project-id>/memory.jsonl`
 - Git status/diff/log inspection
 - local checkpoints with restore confirmation
 - environment/tool diagnosis through an internal `doctor` tool
@@ -52,15 +62,11 @@ The UI intentionally stays small. The agent has the diagnostic, memory, project,
 
 Defaults are optimized for latency:
 
-- `CODEX_MAX_TOKENS=2048`
+- output/context token limits are controlled by the selected provider/model; Codex does not impose a fixed max-token cap
 - `CODEX_TEMPERATURE=0.15`
 - `CODEX_STREAM=1`
 
-Example:
-
-```bash
-CODEX_MAX_TOKENS=4096 python codex.py
-```
+Streaming uses incremental SSE reads and a small output buffer so long responses do not flush every token.
 
 Streaming improves perceived latency, while parallel independent tool calls reduce tool-loop latency. Actual model/provider latency still depends on the remote API.
 
@@ -80,7 +86,7 @@ python -m compileall -q .
 - Codex does not impose a fixed model context/output-token limit. The selected provider/model controls those limits.
 - If the provider reports a context-length error, Codex compacts older conversation turns and retries while preserving the system prompt, current goal, project facts, decisions, and recent tool results.
 - Persistent AI memory is stored outside the active workspace by default at `~/.codex/projects/<project-id>/memory.jsonl` (override the root with `CODEX_HOME`).
-- The banner intentionally does not display the API key or Base URL. It shows the model as `@TON (MODEL)` and `/ (Patch)`.
+- The banner does not display the API key, Base URL, model ID, or workspace path.
 
 ## Faster streaming
 
@@ -89,10 +95,3 @@ The SSE reader uses incremental reads instead of waiting for large buffered chun
 ## Code rendering
 
 Markdown fenced blocks are rendered as terminal code panels with language detection, syntax coloring, line numbers, and optional folding. Completed code fences are rendered exactly once during streaming, preventing HTML/CSS/JavaScript/etc. from leaking out as raw text.
-
-
-### V5 fixes
-- Codex uses the terminal alternate screen and restores it on exit/Ctrl+C.
-- Explicit file/folder deletion is available through the `delete` tool for user-requested paths, including absolute paths, with confirmation protection.
-- When a user asks to create/modify files, the agent is instructed to execute filesystem tools instead of merely printing code, with up to three execution reminders.
-- Tool results are persisted as compact memory events outside the workspace.

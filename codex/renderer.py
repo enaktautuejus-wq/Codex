@@ -179,50 +179,120 @@ def extract_code_blocks(text: str) -> list[dict[str,str]]:
 
 @dataclass
 class LiveMarkdownRenderer:
-    """Stream prose immediately; render each completed code fence exactly once."""
-    cursor:int=0
-    text:str=""
-    emitted_prefix:int=0
+    """Streaming Markdown renderer with a line-safe fence state machine.
 
-    def feed(self,chunk:str)->None:
-        if not chunk:return
-        self.text += chunk.replace("\r\n","\n").replace("\r","\n")
+    It never emits a possible code fence or code contents as plain terminal
+    text while the fence is still incomplete. Prose is buffered briefly so
+    per-token flushes do not make long responses unnecessarily slow.
+    """
+    text: str = ""
+    emitted_prefix: int = 0
+    code_start: int | None = None
+    code_hint: str = ""
+    fence_char: str = ""
+    fence_len: int = 0
+    line_cursor: int = 0
+    last_flush: float = 0.0
+    pending_output: str = ""
+
+    def _emit(self, value: str, force: bool = False) -> None:
+        if not value:
+            return
+        import sys, time
+        self.pending_output += value
+        now = time.monotonic()
+        if force or len(self.pending_output) >= 256 or now - self.last_flush >= 0.035:
+            sys.stdout.write(self.pending_output)
+            sys.stdout.flush()
+            self.pending_output = ""
+            self.last_flush = now
+
+    def _flush(self) -> None:
         import sys
+        if self.pending_output:
+            sys.stdout.write(self.pending_output)
+            sys.stdout.flush()
+            self.pending_output = ""
+
+    @staticmethod
+    def _opening(line: str):
+        stripped = line.rstrip("\r\n")
+        m = re.match(r"^[ \t]{0,3}(`{3,}|~{3,})[ \t]*([^`\r\n]*)$", stripped)
+        if not m:
+            return None
+        return m.group(1)[0], len(m.group(1)), m.group(2).strip()
+
+    def _closing(self, line: str) -> bool:
+        stripped = line.rstrip("\r\n")
+        if not self.fence_char:
+            return False
+        return bool(re.match(
+            r"^[ \t]{0,3}" + re.escape(self.fence_char) +
+            r"{" + str(self.fence_len) + r",}[ \t]*$", stripped
+        ))
+
+    def feed(self, chunk: str) -> None:
+        if not chunk:
+            return
+        self.text += chunk.replace("\r\n", "\n").replace("\r", "\n")
+
+        # Process complete lines only. This prevents partial ``` / ~~~ tokens
+        # from leaking into the terminal as raw text.
         while True:
-            complete=None
-            for item in _fenced_blocks(self.text[self.cursor:]):
-                complete=item; break
-            if complete is not None:
-                rel_start,rel_end,hint,code=complete; start=self.cursor+rel_start; end=self.cursor+rel_end
-                prose=self.text[self.emitted_prefix:start]
-                if prose:
-                    sys.stdout.write(prose); sys.stdout.flush()
-                sys.stdout.write("\n" if prose and not prose.endswith("\n") else "")
-                sys.stdout.write(render_code_block(hint,code)); sys.stdout.write("\n"); sys.stdout.flush()
-                self.cursor=end; self.emitted_prefix=end
-                continue
-            # If there is an opening fence that has not closed, emit only prose before it.
-            tail=self.text[self.emitted_prefix:]
-            m=re.search(r"(?m)^[ \t]{0,3}(`{3,}|~{3,})[ \t]*[^`\r\n]*\n",tail)
-            if m:
-                prose=tail[:m.start()]
-                if prose:
-                    sys.stdout.write(prose); sys.stdout.flush(); self.emitted_prefix += len(prose)
-            else:
-                if tail:
-                    sys.stdout.write(tail); sys.stdout.flush(); self.emitted_prefix=len(self.text)
-            break
+            newline = self.text.find("\n", self.line_cursor)
+            if newline < 0:
+                break
+            line_end = newline + 1
+            line = self.text[self.line_cursor:line_end]
 
-    def finish(self,final_text:str|None=None)->None:
+            if self.code_start is None:
+                opening = self._opening(line)
+                if opening:
+                    self.code_start = line_end
+                    self.code_hint = opening[2]
+                    self.fence_char = opening[0]
+                    self.fence_len = opening[1]
+                    # Everything before this opening fence is prose.
+                    prose = self.text[self.emitted_prefix:self.line_cursor]
+                    self._emit(prose)
+                    self.emitted_prefix = self.code_start
+                else:
+                    # Hold a small suffix that could be the beginning of a fence.
+                    # This keeps streaming responsive without leaking partial fences.
+                    safe_end = line_end
+                    self._emit(self.text[self.emitted_prefix:safe_end])
+                    self.emitted_prefix = safe_end
+            else:
+                if self._closing(line):
+                    code = self.text[self.code_start:self.line_cursor]
+                    self._flush()
+                    self._emit(render_code_block(self.code_hint, code) + "\n", force=True)
+                    self.code_start = None
+                    self.code_hint = ""
+                    self.fence_char = ""
+                    self.fence_len = 0
+                    self.emitted_prefix = line_end
+            self.line_cursor = line_end
+
+    def finish(self, final_text: str | None = None) -> None:
         if final_text is not None:
-            final=final_text.replace("\r\n","\n").replace("\r","\n")
-            if len(final)>=len(self.text): self.text=final
-        import sys
-        remainder=self.text[self.emitted_prefix:]
-        if remainder:
-            sys.stdout.write("\n" if self.emitted_prefix and not remainder.startswith("\n") else "")
-            sys.stdout.write(render_markdown(remainder)); sys.stdout.write("\n")
-        elif not self.text.endswith("\n"):
-            sys.stdout.write("\n")
-        sys.stdout.flush()
-        self.emitted_prefix=len(self.text); self.cursor=len(self.text)
+            final = final_text.replace("\r\n", "\n").replace("\r", "\n")
+            if len(final) >= len(self.text):
+                self.text = final
+
+        # If the model stopped inside a code fence, render the buffered code
+        # as a complete block rather than leaking it as raw Markdown.
+        if self.code_start is not None:
+            code = self.text[self.code_start:]
+            self._flush()
+            self._emit(render_code_block(self.code_hint, code) + "\n", force=True)
+            self.code_start = None
+            self.emitted_prefix = len(self.text)
+        else:
+            remainder = self.text[self.emitted_prefix:]
+            if remainder:
+                self._emit(render_markdown(remainder) + "\n", force=True)
+            else:
+                self._flush()
+        self.line_cursor = len(self.text)
+        self.emitted_prefix = len(self.text)

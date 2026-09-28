@@ -71,40 +71,6 @@ def read_file(ws: Workspace, path: str, start_line: int | None = None, end_line:
         )
     return content
 
-
-
-def _user_path(value: str) -> Path:
-    """Resolve a user-specified path, allowing absolute paths while blocking catastrophic roots."""
-    raw = os.path.expanduser(str(value).strip())
-    if not raw:
-        raise ToolError("Path kosong.")
-    p = Path(raw).resolve() if os.path.isabs(raw) else Path.cwd().joinpath(raw).resolve()
-    blocked = {Path("/"), Path("/data"), Path("/system"), Path("/vendor"), Path("/proc"), Path("/sys"), Path("/dev")}
-    if p in blocked:
-        raise ToolError("Path sistem/root tidak boleh dihapus.")
-    return p
-
-def delete_path(path: str, recursive: bool = False, confirm: str = "") -> str:
-    """Delete a user-requested file or directory. Requires explicit DELETE confirmation."""
-    if confirm != "DELETE":
-        raise ToolError("Penghapusan memerlukan confirm=DELETE.")
-    p = _user_path(path)
-    if not p.exists() and not p.is_symlink():
-        raise ToolError(f"Path tidak ditemukan: {path}")
-    if p.is_symlink() or p.is_file():
-        p.unlink()
-        return f"deleted {p}"
-    if p.is_dir():
-        if not recursive:
-            try:
-                p.rmdir()
-            except OSError as exc:
-                raise ToolError(f"Folder tidak kosong. Gunakan recursive=true jika memang diminta pengguna: {exc}") from exc
-        else:
-            shutil.rmtree(p)
-        return f"deleted directory {p}"
-    raise ToolError(f"Jenis path tidak didukung: {path}")
-
 def write_file(ws: Workspace, path: str, content: str) -> str:
     p = ws.path(path)
     p.parent.mkdir(parents=True, exist_ok=True)
@@ -221,6 +187,35 @@ def bash(ws: Workspace, command: str, cwd: str = ".", timeout: int = 120) -> dic
         "stderr": proc.stderr,
     }
 
+def delete_path(path: str, recursive: bool = False, confirmed: bool = False) -> dict[str, Any]:
+    """Delete a file or directory by absolute/relative path after explicit confirmation."""
+    raw = os.path.expanduser(str(path)).strip()
+    if not raw:
+        raise ToolError("Path penghapusan kosong.")
+    target = Path(raw).resolve()
+    home = Path.home().resolve()
+    protected = {Path("/").resolve(), Path("/system").resolve(), Path("/vendor").resolve(),
+                 Path("/proc").resolve(), Path("/sys").resolve(), Path("/dev").resolve(),
+                 Path("/data").resolve(), home}
+    if target in protected:
+        raise ToolError("Path tersebut dilindungi dan tidak boleh dihapus.")
+    if not target.exists() and not target.is_symlink():
+        raise ToolError(f"Path tidak ditemukan: {target}")
+    if not confirmed:
+        return {"confirmation_required": True, "path": str(target),
+                "message": "Penghapusan membutuhkan konfirmasi eksplisit dari pengguna."}
+    if target.is_symlink() or target.is_file():
+        target.unlink()
+        return {"deleted": True, "path": str(target), "type": "file"}
+    if target.is_dir():
+        if recursive:
+            shutil.rmtree(target)
+        else:
+            target.rmdir()
+        return {"deleted": True, "path": str(target), "type": "directory", "recursive": recursive}
+    raise ToolError(f"Jenis path tidak didukung: {target}")
+
+
 def webfetch(url: str, timeout: int = 30) -> str:
     req = urllib.request.Request(
         url,
@@ -324,8 +319,8 @@ class ToolRegistry:
     def specs(self) -> list[dict[str, Any]]:
         return [
             {"name":"read","description":"Read a workspace file; supports optional line range.","parameters":{"path":"string","start_line":"integer|null","end_line":"integer|null"}},
-            {"name":"write","description":"Create or overwrite a workspace file immediately. Use this instead of merely printing code when the user asks to create a file.","parameters":{"path":"string","content":"string"}},
-            {"name":"delete","description":"Delete a user-requested file or directory. Supports absolute paths. Only use when the user explicitly requested deletion; confirm must be DELETE and recursive=true only for an explicitly requested non-empty directory.","parameters":{"path":"string","recursive":"boolean","confirm":"string"}},
+            {"name":"write","description":"Create or overwrite a workspace file.","parameters":{"path":"string","content":"string"}},
+            {"name":"delete","description":"Delete a file or directory at an explicit path. Use confirmed=true only when the user explicitly requested deletion; recursive=true is required for non-empty directories.","parameters":{"path":"string","recursive":"boolean","confirmed":"boolean"}},
             {"name":"edit","description":"Replace exact text in a workspace file.","parameters":{"path":"string","old":"string","new":"string","count":"integer|null"}},
             {"name":"patch","description":"Apply a unified diff to a workspace file.","parameters":{"path":"string","diff":"string"}},
             {"name":"grep","description":"Regex search through workspace content.","parameters":{"pattern":"string","path":"string","flags":"string"}},
@@ -351,7 +346,7 @@ class ToolRegistry:
     def call(self, name: str, args: dict[str, Any], subagent: Callable[[str, str], str] | None = None) -> Any:
         if name == "read": return read_file(self.ws, args["path"], args.get("start_line"), args.get("end_line"))
         if name == "write": return write_file(self.ws, args["path"], args["content"])
-        if name == "delete": return delete_path(args["path"], bool(args.get("recursive", False)), args.get("confirm", ""))
+        if name == "delete": return delete_path(args["path"], bool(args.get("recursive", False)), bool(args.get("confirmed", False)))
         if name == "edit": return edit_file(self.ws, args["path"], args["old"], args["new"], args.get("count"))
         if name == "patch": return apply_patch(self.ws, args["path"], args["diff"])
         if name == "grep": return grep(self.ws, args["pattern"], args.get("path", "."), args.get("flags", ""))
