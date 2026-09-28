@@ -10,7 +10,7 @@ def _request(endpoint, api_key, payload, accept='application/json'):
 def post_json(endpoint: str, api_key: str, payload: dict[str, Any], timeout: int = 120) -> dict[str, Any]:
     try:
         with urllib.request.urlopen(_request(endpoint,api_key,payload),timeout=timeout) as response:
-            raw=response.read().decode('utf-8','replace'); return json.loads(raw)
+            raw=response.read().decode('utf-8','replace'); obj=json.loads(raw); obj['_codex_meta']={'usage':obj.get('usage') or {}, 'rate_limits':{k:v for k,v in response.headers.items() if 'ratelimit' in k.lower() or 'retry-after' in k.lower()}}; return obj
     except urllib.error.HTTPError as exc:
         body=exc.read().decode('utf-8','replace')
         try:
@@ -23,9 +23,10 @@ def post_json(endpoint: str, api_key: str, payload: dict[str, Any], timeout: int
 def stream_json(endpoint: str, api_key: str, payload: dict[str, Any], timeout: int = 120, on_token: Callable[[str],None] | None = None) -> dict[str, Any]:
     """Consume OpenAI-compatible SSE and reconstruct a normal chat response."""
     data=dict(payload); data['stream']=True
-    content=[]; tool_map={}; finish=None; usage=None
+    content=[]; tool_map={}; finish=None; usage=None; rate_limits={}
     try:
         with urllib.request.urlopen(_request(endpoint,api_key,data,'text/event-stream'),timeout=timeout) as response:
+            rate_limits={k:v for k,v in response.headers.items() if 'ratelimit' in k.lower() or 'retry-after' in k.lower()}
             buffer=''
             while True:
                 # read1/readline avoids urllib buffering a large chunk before emitting SSE tokens.
@@ -61,7 +62,7 @@ def stream_json(endpoint: str, api_key: str, payload: dict[str, Any], timeout: i
         body=exc.read().decode('utf-8','replace'); raise APIError(f'HTTP {exc.code}: {body}') from exc
     except urllib.error.URLError as exc: raise APIError(f'Koneksi gagal: {exc.reason}') from exc
     except TimeoutError as exc: raise APIError('Request timeout.') from exc
-    return {'choices':[{'message':{'role':'assistant','content':''.join(content),'tool_calls':[tool_map[k] for k in sorted(tool_map)]},'finish_reason':finish}], 'usage':usage}
+    return {'choices':[{'message':{'role':'assistant','content':''.join(content),'tool_calls':[tool_map[k] for k in sorted(tool_map)]},'finish_reason':finish}], 'usage':usage, '_codex_meta':{'usage':usage or {}, 'rate_limits':rate_limits}}
 
 def extract_text(response: dict[str, Any]) -> str:
     choices=response.get('choices') or []

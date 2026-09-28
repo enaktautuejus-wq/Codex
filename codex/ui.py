@@ -169,16 +169,18 @@ def choose_workspace() -> str:
         return candidate
 
 def banner(config: Config):
-    print(RED + r"""
- ██████╗ ██████╗ ██████╗ ███████╗██╗  ██╗
-██╔════╝██╔═══██╗██╔══██╗██╔════╝╚██╗██╔╝
-██║     ██║   ██║██║  ██║█████╗   ╚███╔╝
-██║     ██║   ██║██║  ██║██╔══╝   ██╔██╗
-╚██████╗╚██████╔╝██████╔╝███████╗██╔╝ ██╗
- ╚═════╝ ╚═════╝ ╚═════╝ ╚══════╝╚═╝  ╚═╝
+    BLACK='\033[40m'; REDB='\033[91m'
+    print(REDB + BLACK + r"""
+     ██╗ █████╗  ██████╗██╗  ██╗
+     ██║██╔══██╗██╔════╝██║ ██╔╝
+     ██║███████║██║     █████╔╝ 
+██   ██║██╔══██║██║     ██╔═██╗ 
+╚█████╔╝██║  ██║╚██████╗██║  ██╗
+ ╚════╝ ╚═╝  ╚═╝ ╚═════╝╚═╝  ╚═╝
 """ + RESET)
-    cols = min(shutil.get_terminal_size((80,24)).columns, 100)
-    print("\n" + "─" * cols + "\n")
+    cols=min(shutil.get_terminal_size((80,24)).columns,100)
+    print("\n"+"─"*cols+"\n")
+
 
 def _change_workspace(agent, config, registry, raw_path: str):
     raw_path = raw_path.strip()
@@ -241,6 +243,19 @@ def run_ui(agent, config, registry):
         if text == "/clear":
             agent.messages = [{"role":"system","content":agent.messages[0]["content"]}]
             clear(); banner(config); continue
+        if text == "/new":
+            from .memory import MemoryStore
+            registry.memory = MemoryStore(str(registry.ws.root))
+            agent.registry.memory = registry.memory
+            agent.messages = [{"role":"system","content":agent.messages[0]["content"]}]
+            agent.execution_reminders = 0
+            agent.request_count = 0
+            agent.last_usage = {}
+            agent.last_rate_limits = {}
+            last_answer = ""
+            clear(); banner(config)
+            print(f"{DIM}Session baru dimulai. Memori percakapan sebelumnya tidak digunakan.{RESET}\n")
+            continue
         if text == "/pwd":
             print(f"Workspace: {registry.ws.root}\n")
             continue
@@ -260,21 +275,27 @@ def run_ui(agent, config, registry):
             continue
         try:
             print(f"{CYAN}root@ai-codex:~#{RESET}")
-            live = LiveMarkdownRenderer()
+            print(f"{DIM}⠿ Jack sedang berpikir...{RESET}", flush=True)
             streamed=[]
-            def on_token(piece):
-                streamed.append(piece)
-                live.feed(piece)
+            def on_token(piece): streamed.append(piece)
             agent.stream_callback = on_token
             try:
                 answer = agent.run(text)
             finally:
                 agent.stream_callback = None
             last_answer = "".join(streamed) if streamed else answer
-            if streamed:
-                live.finish(answer)
-            else:
-                print(render_markdown(answer)); print()
+            print("\r\033[2K", end="")
+            print(render_markdown(last_answer))
+            stats=agent.runtime_stats(); usage=stats.get("usage") or {}
+            extra=f"request {stats.get('requests',0)}"
+            if usage.get("total_tokens") is not None: extra += f" · tokens {usage['total_tokens']}"
+            if stats.get("last_latency_ms"): extra += f" · {stats['last_latency_ms']} ms avg"
+            limits=stats.get("rate_limits") or {}
+            remaining_req=next((v for k,v in limits.items() if "remaining-requests" in k.lower()), None)
+            remaining_tok=next((v for k,v in limits.items() if "remaining-tokens" in k.lower()), None)
+            if remaining_req is not None: extra += f" · req left {remaining_req}"
+            if remaining_tok is not None: extra += f" · tok left {remaining_tok}"
+            print(f"{DIM}[{extra}]{RESET}\n")
         except KeyboardInterrupt:
             restore_terminal()
             clear()

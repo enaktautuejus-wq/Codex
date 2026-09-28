@@ -2,6 +2,7 @@ from __future__ import annotations
 import os
 from pathlib import Path
 from collections import Counter
+import json, hashlib, re
 
 SKIP={'.git','.codex','node_modules','__pycache__','.gradle','build','dist','target','.venv','venv'}
 SECRET_NAMES={'.env','.env.local','.env.production','.npmrc','.pypirc','credentials.json','secrets.json'}
@@ -9,7 +10,11 @@ LANG={
 '.py':'Python','.js':'JavaScript','.ts':'TypeScript','.tsx':'TSX','.jsx':'JSX','.java':'Java','.kt':'Kotlin','.kts':'Kotlin/Gradle','.gradle':'Gradle','.html':'HTML','.css':'CSS','.scss':'SCSS','.xml':'XML','.json':'JSON','.yaml':'YAML','.yml':'YAML','.go':'Go','.rs':'Rust','.c':'C','.h':'C/C++','.cpp':'C++','.cs':'C#','.swift':'Swift','.dart':'Dart','.php':'PHP','.rb':'Ruby','.lua':'Lua','.sql':'SQL','.sh':'Shell','.ps1':'PowerShell','.groovy':'Groovy','.scala':'Scala','.sol':'Solidity','.vue':'Vue','.svelte':'Svelte','.md':'Markdown'}
 
 class ProjectIndex:
-    def __init__(self, root: str): self.root=Path(root).resolve(); self.data={}
+    def __init__(self, root: str):
+        self.root=Path(root).resolve(); self.data={}
+        home=Path(os.environ.get("CODEX_HOME", str(Path.home()/".codex"))).expanduser()
+        self.project_id=hashlib.sha256(str(self.root).encode()).hexdigest()[:20]
+        self.cache_path=home/"projects"/self.project_id/"index.json"
     def scan(self)->dict:
         files=dirs=0; sizes=0; langs=Counter(); configs=[]; samples=[]
         for base, dnames, fnames in os.walk(self.root):
@@ -34,7 +39,32 @@ class ProjectIndex:
                             samples.append({'path':str(p.relative_to(self.root)),'content':text})
                         except Exception: pass
         self.data={'root':str(self.root),'files':files,'directories':dirs,'bytes':sizes,'languages':dict(langs),'configs':configs[:80],'samples':samples[:10]}
+        try:
+            self.cache_path.parent.mkdir(parents=True, exist_ok=True)
+            self.cache_path.write_text(json.dumps(self.data, ensure_ascii=False), encoding='utf-8')
+        except OSError:
+            pass
         return self.data
+
+    def relevant_context(self, query: str, limit: int = 6) -> str:
+        if not self.data:
+            self.scan()
+        q=set(re.findall(r'[\w.-]+', (query or '').lower()))
+        candidates=[]
+        for sample in self.data.get('samples', []):
+            path=sample.get('path','')
+            content=sample.get('content','')
+            words=set(re.findall(r'[\w.-]+', (path+' '+content).lower()))
+            score=len(q & words)
+            if score:
+                candidates.append((score,path,content))
+        candidates.sort(key=lambda x:(x[0],x[1]), reverse=True)
+        if not candidates:
+            return ''
+        out=['RELEVANT PROJECT FILES FOR CURRENT REQUEST:']
+        for _,path,content in candidates[:limit]:
+            out.append(f'--- {path} ---\n{content[:2800]}')
+        return '\n'.join(out)
     def compact_context(self)->str:
         if not self.data: self.scan()
         d=self.data

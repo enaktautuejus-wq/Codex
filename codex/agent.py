@@ -65,7 +65,7 @@ AUTONOMOUS CODING WORKFLOW
 19. Continue through recoverable technical errors instead of stopping after the first failed command.
 20. Stop and report a real blocker when further progress would require missing information, unavailable permissions, or an unavailable capability.
 21. For larger work, maintain a todo list when it materially improves reliability.
-22. Delegate focused subtasks with the task tool when doing so improves correctness or reduces context complexity.
+22. Delegate focused subtasks only when the task is genuinely complex; use fewer agents for simple tasks to reduce latency and context usage. Prefer parallel independent read-only tool calls when useful.
 
 WORKSPACE
 23. The active workspace is the project directory selected during setup or later with /cd.
@@ -202,6 +202,10 @@ F. RESPONSE QUALITY
 - Keep explanations proportional to the request.
 - Do not expose internal chain-of-thought; provide concise conclusions and evidence.
 
+RUNTIME TELEMETRY
+- Track request count, latency, token usage when the provider reports it, and rate-limit headers when available. Never invent limits or token counts.
+- Use provider errors and returned usage as evidence for context/output decisions.
+
 The goal is reliable execution: understand the user's actual request, use the available tools, verify the result, recover from ordinary technical failures, and report what really happened. When beginning work in a non-empty workspace, use project_scan first unless the current project context is already sufficient. Use memory to preserve important decisions and prior work. Use git/checkpoint tools before risky multi-file changes when practical. Prefer concise responses and tool calls so latency stays low.
 """
 
@@ -224,6 +228,10 @@ class Agent:
         self.native_tools = True
         self.stream_callback = None
         self.execution_reminders = 0
+        self.request_count = 0
+        self.total_latency_ms = 0.0
+        self.last_usage: dict[str, Any] = {}
+        self.last_rate_limits: dict[str, str] = {}
 
     def _compact_context(self, force: bool = False) -> None:
         """Compact only when necessary; do not guess a provider's context window."""
@@ -258,7 +266,14 @@ class Agent:
             payload["tools"] = self._native_tool_specs()
             payload["tool_choice"] = "auto"
         try:
+            started = time.monotonic()
             response = self._call_with_retry(payload)
+            elapsed = (time.monotonic() - started) * 1000.0
+            self.request_count += 1
+            self.total_latency_ms += elapsed
+            meta = response.get("_codex_meta") or {}
+            self.last_usage = meta.get("usage") or response.get("usage") or {}
+            self.last_rate_limits = meta.get("rate_limits") or {}
             return extract_text(response), response, native
         except APIError as exc:
             # Some OpenAI-compatible gateways reject `tools`. Fall back once to
@@ -275,7 +290,14 @@ class Agent:
                 }
                 if self.config.max_tokens is not None:
                     fallback_payload["max_tokens"] = self.config.max_tokens
+                started = time.monotonic()
                 response = self._call_with_retry(fallback_payload)
+                elapsed = (time.monotonic() - started) * 1000.0
+                self.request_count += 1
+                self.total_latency_ms += elapsed
+                meta = response.get("_codex_meta") or {}
+                self.last_usage = meta.get("usage") or response.get("usage") or {}
+                self.last_rate_limits = meta.get("rate_limits") or {}
                 return extract_text(response), response, False
             raise
 
@@ -507,6 +529,9 @@ class Agent:
         ]
         return any(re.search(p, command, re.I) for p in patterns)
 
+    def runtime_stats(self) -> dict[str, Any]:
+        return {"requests": self.request_count, "last_latency_ms": round(self.total_latency_ms / self.request_count, 1) if self.request_count else 0, "usage": self.last_usage, "rate_limits": self.last_rate_limits, "model": self.config.model}
+
     def run(self, user_text: str) -> str:
         if user_text.startswith("CONFIRM CHECKPOINT "):
             name=user_text[len("CONFIRM CHECKPOINT "):].strip()
@@ -522,6 +547,9 @@ class Agent:
             "Do not lose earlier task constraints unless this request supersedes them."
         )
         self.messages.append({"role": "system", "content": goal_context})
+        relevant_project = self.registry.project.relevant_context(user_text, 6) if hasattr(self.registry, "project") else ""
+        if relevant_project:
+            self.messages.append({"role": "system", "content": relevant_project})
         if memory_context:
             self.messages.append({"role": "system", "content": "RELEVANT MEMORY:\n" + memory_context})
         self.messages.append({"role": "user", "content": user_text})

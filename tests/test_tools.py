@@ -179,8 +179,7 @@ class FinalUpgradeTests(unittest.TestCase):
         buf = io.StringIO()
         with contextlib.redirect_stdout(buf):
             live.feed("Intro\n```html\n<div>")
-            self.assertIn("Intro", buf.getvalue())
-            self.assertNotIn("<div>", buf.getvalue())
+            self.assertEqual(buf.getvalue(), "")
             live.feed("ok</div>\n```\nDone")
             live.finish()
         plain = re.sub(r"\x1b\[[0-9;]*m", "", buf.getvalue())
@@ -254,3 +253,26 @@ class RegressionFixTests(unittest.TestCase):
             finally:
                 if old is None: os.environ.pop("CODEX_HOME", None)
                 else: os.environ["CODEX_HOME"] = old
+
+
+def test_html_fence_stream_no_leak():
+    from codex.renderer import LiveMarkdownRenderer
+    import io, contextlib
+    r=LiveMarkdownRenderer()
+    for piece in ["te", "ks\n```ht", "ml\n<html>\n", "<body>Hi</body>\n", "</html>\n", "```\n"]: r.feed(piece)
+    buf=io.StringIO()
+    with contextlib.redirect_stdout(buf): r.finish()
+    out=buf.getvalue()
+    assert "<html>" in out and "┌─ html" in out and "```html" not in out
+
+
+def test_memory_new_session_isolated():
+    import tempfile
+    from codex.memory import MemoryStore
+    with tempfile.TemporaryDirectory() as d:
+        a=MemoryStore(d); a.add("user","old secret session")
+        b=MemoryStore(d)
+        assert "old secret session" not in b.context("old secret session", 10)
+        b.add("decision","durable architecture")
+        c=MemoryStore(d)
+        assert "durable architecture" in c.context("architecture", 10)

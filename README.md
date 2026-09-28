@@ -8,7 +8,7 @@ OpenAI-compatible terminal coding/project agent for Termux. Python standard libr
 pkg update
 pkg install python git ripgrep
 termux-setup-storage
-git clone <your-repository>.git
+git clone https://github.com/enaktautuejus-wq/Codex.git
 cd Codex
 python codex.py
 ```
@@ -95,3 +95,13 @@ The SSE reader uses incremental reads instead of waiting for large buffered chun
 ## Code rendering
 
 Markdown fenced blocks are rendered as terminal code panels with language detection, syntax coloring, line numbers, and optional folding. Completed code fences are rendered exactly once during streaming, preventing HTML/CSS/JavaScript/etc. from leaking out as raw text.
+
+## Jack runtime additions
+
+- `/new` starts a fresh AI session. Previous conversation/tool memory is not loaded into the new session.
+- Durable project knowledge is kept separately under `~/.codex/projects/<project-id>/memory.jsonl`.
+- Assistant responses are rendered from the complete response to prevent Markdown fence/code leakage across streaming chunks.
+- The large banner is now `Jack` with a red/black terminal style.
+- Runtime telemetry reports request count, provider-reported token usage, latency, and rate-limit headers when available.
+- Context/output limits are not hard-coded by Codex; provider/model limits and provider errors drive compaction/retry behavior.
+- Verification is task-aware and is not forced for non-build/non-test work.
