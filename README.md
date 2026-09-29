@@ -128,9 +128,9 @@ Markdown fenced blocks are rendered as terminal code panels with language detect
 
 V11 melanjutkan langsung dari V9. V10 tidak digunakan sebagai basis.
 
-- Tekan **ESC** saat AI sedang merespons untuk membatalkan request/stream aktif.
+- Tekan **ESC** saat AI sedang merespons untuk membatalkan request/stream aktif; setelah dibatalkan prompt langsung kembali tanpa pesan tambahan.
 - Setelah dibatalkan, prompt kembali sehingga chat baru dapat dikirim tanpa restart aplikasi.
 - Jika AI sedang menjalankan Bash/Shell, ESC mengirim penghentian ke process group shell dan membersihkan operasi aktif.
 - SSE streaming menggunakan pembacaan incremental dan jalur pembatalan langsung untuk mengurangi jeda UI.
-- Banner androidPE teks besar dikembalikan menjadi banner bergaya **Kali Linux** biru/cyan/putih.
+- Banner teks besar androidPE dihapus dan diganti logo naga Kali bergaya biru/cyan berdasarkan referensi logo yang diberikan.
 - Prompt tetap `root@androidPE:~#` dan `root@ai-androidPE:~#`.

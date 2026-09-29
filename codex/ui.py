@@ -175,16 +175,44 @@ def choose_workspace() -> str:
         return candidate
 
 def banner(config: Config):
-    BLUE = "\033[94m"; CYANB = "\033[96m"; WHITEB = "\033[97m"
-    print(BLUE + r"""
-       /\
-      /  \
-     / /\ \
-    / /  \\ \
-   /_/____\_\
-   \\        /
-    \\______/
-""" + WHITEB + "KALI LINUX" + CYANB + " · Codex" + RESET)
+    # Kali dragon logo derived from the user's supplied reference image.
+    # Rendered as ANSI blocks so it works directly in a normal Termux TTY.
+    KALI_BLUE = "\033[38;5;33m"
+    KALI_CYAN = "\033[96m"
+    logo = [
+        "                  ██████████",
+        "                          ██████████",
+        "                                  ██████",
+        "                    ██████████████████████",
+        "                                    ██████",
+        "                            ██████████████",
+        "                    ████████            ████",
+        "                                          ████████████",
+        "                                        ████████████████████",
+        "                                      ██████            ██████████",
+        "                                    ██████                    ██████",
+        "                                    ████                        ██████",
+        "                                    ████                          ██████",
+        "                                    ████                              ████",
+        "                                    ████",
+        "                                    ████",
+        "                                      ██████",
+        "                                        ████████████",
+        "                                            ████████████████████",
+        "                                                        ██████████████",
+        "                                                              ████  ██████",
+        "                                                                ████    ████",
+        "                                                                  ████      ██",
+        "                                                                    ████",
+        "                                                                      ████",
+        "                                                                        ██",
+        "                                                                        ████",
+        "                                                                          ██",
+        "                                                                          ██",
+    ]
+    for i, line in enumerate(logo):
+        # Alternate Kali blue/cyan for a subtle Kali-style terminal palette.
+        print((KALI_CYAN if i % 5 == 0 else KALI_BLUE) + line.rstrip() + RESET)
     cols=min(shutil.get_terminal_size((80,24)).columns,100)
     print("\n"+"─"*cols+"\n")
 
@@ -456,7 +484,7 @@ def run_ui(agent, config, registry):
         except CancelledError:
             restore_terminal()
             agent.reset_cancel()
-            print(f"\n{CYAN}⏹ Dihentikan dengan ESC. Kamu bisa langsung mengirim chat baru.{RESET}\n")
+            # ESC is intentionally silent: immediately return to the normal prompt.
             continue
         except KeyboardInterrupt:
             restore_terminal()
