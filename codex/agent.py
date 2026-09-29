@@ -2,9 +2,10 @@ from __future__ import annotations
 import json
 import re
 import time
+import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Any
-from .api import post_json, stream_json, extract_text, APIError
+from .api import post_json, stream_json, extract_text, APIError, CancelledError
 from .config import Config
 from .tools import ToolRegistry
 
@@ -253,6 +254,9 @@ class Agent:
         self.native_tools = True
         self.stream_callback = None
         self.event_callback = None
+        self.cancel_event = threading.Event()
+        self._active_response = None
+        self.registry.cancel_event = self.cancel_event
         self.execution_reminders = 0
         self.request_count = 0
         self.total_latency_ms = 0.0
@@ -327,6 +331,25 @@ class Agent:
                 return extract_text(response), response, False
             raise
 
+    def _set_active_response(self, response):
+        self._active_response = response
+
+    def cancel(self) -> None:
+        """Cancel the current model/tool operation and close the active HTTP stream."""
+        self.cancel_event.set()
+        response = self._active_response
+        if response is not None:
+            try: response.close()
+            except Exception: pass
+
+    def reset_cancel(self) -> None:
+        self.cancel_event.clear()
+        self._active_response = None
+
+    def _check_cancelled(self) -> None:
+        if self.cancel_event.is_set():
+            raise CancelledError('Operasi dihentikan dengan ESC.')
+
     def _call_with_retry(self, payload: dict[str, Any], attempts: int = 3) -> dict[str, Any]:
         last: Exception | None = None
         for attempt in range(attempts):
@@ -350,9 +373,9 @@ class Agent:
                                 return
                             decided=True
                             callback(joined)
-                        result=stream_json(self.config.endpoint, self.config.api_key, payload, timeout=120, on_token=fallback_stream)
+                        result=stream_json(self.config.endpoint, self.config.api_key, payload, timeout=120, on_token=fallback_stream, cancel_event=self.cancel_event, on_response=self._set_active_response)
                         return result
-                    return stream_json(self.config.endpoint, self.config.api_key, payload, timeout=120, on_token=callback)
+                    return stream_json(self.config.endpoint, self.config.api_key, payload, timeout=120, on_token=callback, cancel_event=self.cancel_event, on_response=self._set_active_response)
                 return post_json(self.config.endpoint, self.config.api_key, payload)
             except APIError as exc:
                 last = exc
@@ -457,6 +480,7 @@ class Agent:
         return child.run_once()
 
     def _execute_tool(self, name: str, args: dict[str, Any]) -> Any:
+        self._check_cancelled()
         if self.event_callback:
             try:
                 self.event_callback("tool_start", name, args)
@@ -559,6 +583,7 @@ class Agent:
 
     def run_once(self) -> str:
         for _ in range(self.max_steps):
+            self._check_cancelled()
             response_text, response_json, native = self._model_call()
             calls = self._native_calls(response_json) if native else []
             if calls:
@@ -581,6 +606,7 @@ class Agent:
                 with ThreadPoolExecutor(max_workers=min(6, len(prepared) or 1)) as pool:
                     futures={pool.submit(self._execute_tool, name, args):(call,name,args) for call,name,args in prepared}
                     for fut in as_completed(futures):
+                        self._check_cancelled()
                         call,name,args=futures[fut]
                         try: result=fut.result()
                         except Exception as exc: result={"error":str(exc)}
@@ -643,6 +669,7 @@ class Agent:
         return {"requests": self.request_count, "last_latency_ms": round(self.total_latency_ms / self.request_count, 1) if self.request_count else 0, "usage": self.last_usage, "rate_limits": self.last_rate_limits, "model": self.config.model}
 
     def run(self, user_text: str) -> str:
+        self.reset_cancel()
         if user_text.startswith("CONFIRM CHECKPOINT "):
             name=user_text[len("CONFIRM CHECKPOINT "):].strip()
             return json.dumps(self.registry.call("checkpoint", {"action":"restore","name":name}), ensure_ascii=False)

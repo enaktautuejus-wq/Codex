@@ -5,12 +5,15 @@ import shutil
 import sys
 import subprocess
 import base64
+import threading
+import time
 import termios
 import tty
 from .config import Config, normalize_base_url, load_saved_config, save_config, update_api_key, has_saved_config
 from .tools import Workspace
 from .project import ProjectIndex
 from .renderer import render_markdown, LiveMarkdownRenderer, extract_code_blocks
+from .api import CancelledError
 
 RED = "\033[91m"
 GREEN = "\033[92m"
@@ -172,16 +175,16 @@ def choose_workspace() -> str:
         return candidate
 
 def banner(config: Config):
-    BLACK='\033[40m'; GREENB='\033[92m'; WHITEB='\033[97m'
-    # androidPE: green + black + white terminal identity.
-    print(BLACK + GREENB + r"""
-     █████╗ ███╗   ██╗██████╗ ██████╗  ██████╗ ██╗██████╗ ███████╗
-    ██╔══██╗████╗  ██║██╔══██╗██╔══██╗██╔═══██╗██║██╔══██╗██╔════╝
-    ███████║██╔██╗ ██║██║  ██║██████╔╝██║   ██║██║██║  ██║█████╗  
-    ██╔══██║██║╚██╗██║██║  ██║██╔═══╝ ██║   ██║██║██║  ██║██╔══╝  
-    ██║  ██║██║ ╚████║██████╔╝██║     ╚██████╔╝██║██████╔╝███████╗
-    ╚═╝  ╚═╝╚═╝  ╚═══╝╚═════╝ ╚═╝      ╚═════╝ ╚═╝╚═════╝ ╚══════╝
-""" + WHITEB + "androidPE" + GREENB + " · coding agent" + RESET)
+    BLUE = "\033[94m"; CYANB = "\033[96m"; WHITEB = "\033[97m"
+    print(BLUE + r"""
+       /\
+      /  \
+     / /\ \
+    / /  \\ \
+   /_/____\_\
+   \\        /
+    \\______/
+""" + WHITEB + "KALI LINUX" + CYANB + " · Codex" + RESET)
     cols=min(shutil.get_terminal_size((80,24)).columns,100)
     print("\n"+"─"*cols+"\n")
 
@@ -220,6 +223,62 @@ def copy_text_to_clipboard(text: str) -> str:
     sys.stdout.flush()
     return "Kode dikirim ke clipboard terminal via OSC52 (jika terminal mendukungnya)."
 
+
+def _start_escape_watcher(agent):
+    """Watch the live TTY for a bare ESC while the agent is busy.
+
+    The watcher owns raw/cbreak mode only during an active request; all other
+    keys are ignored so the normal input() prompt remains unchanged afterward.
+    """
+    if not sys.stdin.isatty():
+        return None, None
+    stop = threading.Event()
+    triggered = threading.Event()
+    def watch():
+        fd = sys.stdin.fileno()
+        old = termios.tcgetattr(fd)
+        try:
+            tty.setcbreak(fd)
+            while not stop.is_set():
+                import select
+                ready, _, _ = select.select([fd], [], [], 0.05)
+                if not ready: continue
+                data = os.read(fd, 1)
+                if data == b"\x1b":
+                    triggered.set()
+                    agent.cancel()
+                    return
+        except (OSError, termios.error):
+            return
+        finally:
+            try: termios.tcsetattr(fd, termios.TCSADRAIN, old)
+            except (OSError, termios.error): pass
+    thread=threading.Thread(target=watch, daemon=True, name="codex-esc-watcher")
+    thread.start()
+    return stop, triggered
+
+def _run_agent_interruptible(agent, text):
+    """Run the agent in a worker so ESC can be handled immediately by the TTY watcher."""
+    result={"answer":"", "error":None}
+    done=threading.Event()
+    def worker():
+        try: result["answer"] = agent.run(text)
+        except BaseException as exc: result["error"] = exc
+        finally: done.set()
+    thread=threading.Thread(target=worker, daemon=True, name="codex-agent")
+    stop, triggered = _start_escape_watcher(agent)
+    thread.start()
+    try:
+        while not done.wait(0.05):
+            pass
+    finally:
+        if stop: stop.set()
+        if triggered.is_set(): agent.cancel()
+        if thread.is_alive(): thread.join(timeout=0.5)
+    if triggered.is_set():
+        raise CancelledError("Operasi dihentikan dengan ESC.")
+    if result["error"] is not None: raise result["error"]
+    return result["answer"]
 
 def run_ui(agent, config, registry):
     import atexit
@@ -379,7 +438,7 @@ def run_ui(agent, config, registry):
             agent.stream_callback = on_token
             agent.event_callback = on_event
             try:
-                answer = agent.run(text)
+                answer = _run_agent_interruptible(agent, text)
             finally:
                 agent.stream_callback = None
                 agent.event_callback = None
@@ -394,6 +453,11 @@ def run_ui(agent, config, registry):
             if remaining_req is not None: extra += f" · req left {remaining_req}"
             if remaining_tok is not None: extra += f" · tok left {remaining_tok}"
             print(f"{DIM}[{extra}]{RESET}\n")
+        except CancelledError:
+            restore_terminal()
+            agent.reset_cancel()
+            print(f"\n{CYAN}⏹ Dihentikan dengan ESC. Kamu bisa langsung mengirim chat baru.{RESET}\n")
+            continue
         except KeyboardInterrupt:
             restore_terminal()
             clear()

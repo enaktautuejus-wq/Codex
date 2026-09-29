@@ -1,5 +1,0 @@
-#!/data/data/com.termux/files/usr/bin/sh
-set -eu
-
-CODEX_DIR="${CODEX_DIR:-$HOME/Codex}"
-exec python "$CODEX_DIR/codex.py" "$@"

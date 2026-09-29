@@ -10,19 +10,8 @@ pkg install python git ripgrep
 termux-setup-storage
 git clone <your-repository>.git
 cd Codex
-./install.sh
-codex
+python codex.py
 ```
-
-## Command `codex`
-
-Setelah `./install.sh`, androidPE dapat dijalankan langsung dengan:
-
-```bash
-codex
-```
-
-Launcher memasang command ke `$PREFIX/bin/codex` dan menunjuk ke `codex.py` di folder instalasi. Jika repository dipindahkan setelah instalasi, jalankan ulang `./install.sh`. Untuk debugging, `python codex.py` tetap didukung.
 
 ## Startup
 
@@ -134,3 +123,14 @@ Markdown fenced blocks are rendered as terminal code panels with language detect
 - Streaming tetap bertahap untuk teks; code fence dijaga agar tidak rusak saat chunk SSE terpotong.
 - Jika model hanya mengeluarkan artifact yang secara eksplisit ditandai `FILE:`/`PATH:` atau menyatakan membuat file dan menyertakan code block, ada fallback save terbatas untuk file yang belum ada. Existing file tidak ditimpa oleh fallback tersebut.
 
+
+## V11 — ESC cancel + Kali banner
+
+V11 melanjutkan langsung dari V9. V10 tidak digunakan sebagai basis.
+
+- Tekan **ESC** saat AI sedang merespons untuk membatalkan request/stream aktif.
+- Setelah dibatalkan, prompt kembali sehingga chat baru dapat dikirim tanpa restart aplikasi.
+- Jika AI sedang menjalankan Bash/Shell, ESC mengirim penghentian ke process group shell dan membersihkan operasi aktif.
+- SSE streaming menggunakan pembacaan incremental dan jalur pembatalan langsung untuk mengurangi jeda UI.
+- Banner androidPE teks besar dikembalikan menjadi banner bergaya **Kali Linux** biru/cyan/putih.
+- Prompt tetap `root@androidPE:~#` dan `root@ai-androidPE:~#`.

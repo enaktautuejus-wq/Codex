@@ -6,6 +6,8 @@ import os
 import re
 import shutil
 import subprocess
+import signal
+import time
 import tempfile
 import urllib.parse
 import urllib.request
@@ -183,21 +185,44 @@ def list_dir(ws: Workspace, path: str = ".", pattern: str = "*") -> list[str]:
     base = ws.path(path)
     return [str(p.relative_to(ws.root)) for p in sorted(base.glob(pattern))]
 
-def bash(ws: Workspace, command: str, cwd: str = ".", timeout: int = 120) -> dict[str, Any]:
+def bash(ws: Workspace, command: str, cwd: str = ".", timeout: int = 120, cancel_event=None) -> dict[str, Any]:
+    """Run a shell command while allowing the UI ESC cancel path to kill it."""
     working = ws.path(cwd)
-    proc = subprocess.run(
-        command,
-        shell=True,
-        cwd=working,
-        capture_output=True,
-        text=True,
-        timeout=max(1, min(timeout, 900)),
+    proc = subprocess.Popen(
+        command, shell=True, cwd=working, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+        text=True, start_new_session=True, bufsize=1,
     )
-    return {
-        "exit_code": proc.returncode,
-        "stdout": proc.stdout,
-        "stderr": proc.stderr,
-    }
+    started = time.monotonic()
+    try:
+        while proc.poll() is None:
+            if cancel_event is not None and cancel_event.is_set():
+                try: os.killpg(proc.pid, signal.SIGTERM)
+                except (OSError, ProcessLookupError): pass
+                try: proc.wait(timeout=0.8)
+                except subprocess.TimeoutExpired:
+                    try: os.killpg(proc.pid, signal.SIGKILL)
+                    except (OSError, ProcessLookupError): pass
+                    proc.wait(timeout=1)
+                stdout, stderr = proc.communicate()
+                return {"cancelled": True, "exit_code": proc.returncode, "stdout": stdout, "stderr": stderr}
+            if time.monotonic() - started >= max(1, min(timeout, 900)):
+                try: os.killpg(proc.pid, signal.SIGTERM)
+                except (OSError, ProcessLookupError): pass
+                try: proc.wait(timeout=0.8)
+                except subprocess.TimeoutExpired:
+                    try: os.killpg(proc.pid, signal.SIGKILL)
+                    except (OSError, ProcessLookupError): pass
+                    proc.wait(timeout=1)
+                stdout, stderr = proc.communicate()
+                return {"timeout": True, "exit_code": proc.returncode, "stdout": stdout, "stderr": stderr}
+            time.sleep(0.05)
+        stdout, stderr = proc.communicate()
+        return {"exit_code": proc.returncode, "stdout": stdout, "stderr": stderr}
+    except BaseException:
+        if proc.poll() is None:
+            try: os.killpg(proc.pid, signal.SIGTERM)
+            except (OSError, ProcessLookupError): pass
+        raise
 
 def delete_path(path: str, recursive: bool = False, confirmed: bool = False) -> dict[str, Any]:
     """Delete a file or directory by absolute/relative path after explicit confirmation."""
@@ -366,7 +391,7 @@ class ToolRegistry:
         if name == "grep": return grep(self.ws, args["pattern"], args.get("path", "."), args.get("flags", ""))
         if name == "glob": return glob_files(self.ws, args["pattern"], args.get("path", "."))
         if name == "list": return list_dir(self.ws, args.get("path", "."), args.get("pattern", "*"))
-        if name == "bash": return bash(self.ws, args["command"], args.get("cwd", "."), args.get("timeout", 120))
+        if name == "bash": return bash(self.ws, args["command"], args.get("cwd", "."), args.get("timeout", 120), getattr(self, "cancel_event", None))
         if name == "webfetch": return webfetch(args["url"], args.get("timeout", 30))
         if name == "websearch": return websearch(args["query"], args.get("max_results", 8))
         if name == "todo": return self.todo.run(args["action"], args.get("items"))

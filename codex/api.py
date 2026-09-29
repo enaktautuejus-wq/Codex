@@ -3,6 +3,7 @@ import json, urllib.error, urllib.request
 from typing import Any, Callable
 
 class APIError(RuntimeError): pass
+class CancelledError(APIError): pass
 
 def _request(endpoint, api_key, payload, accept='application/json'):
     return urllib.request.Request(endpoint,data=json.dumps(payload).encode(),method='POST',headers={'Authorization':f'Bearer {api_key}','Content-Type':'application/json','Accept':accept,'User-Agent':'Codex-Termux-Agent/2.0'})
@@ -20,16 +21,21 @@ def post_json(endpoint: str, api_key: str, payload: dict[str, Any], timeout: int
     except urllib.error.URLError as exc: raise APIError(f'Koneksi gagal: {exc.reason}') from exc
     except TimeoutError as exc: raise APIError('Request timeout.') from exc
 
-def stream_json(endpoint: str, api_key: str, payload: dict[str, Any], timeout: int = 120, on_token: Callable[[str],None] | None = None) -> dict[str, Any]:
+def stream_json(endpoint: str, api_key: str, payload: dict[str, Any], timeout: int = 120, on_token: Callable[[str],None] | None = None, cancel_event=None, on_response: Callable[[Any], None] | None = None) -> dict[str, Any]:
     """Consume OpenAI-compatible SSE and reconstruct a normal chat response."""
     data=dict(payload); data['stream']=True
     content=[]; tool_map={}; finish=None; usage=None; rate_limits={}
     try:
         with urllib.request.urlopen(_request(endpoint,api_key,data,'text/event-stream'),timeout=timeout) as response:
+            if on_response: on_response(response)
+            if cancel_event is not None and cancel_event.is_set():
+                raise CancelledError('Operasi dibatalkan oleh pengguna.')
             rate_limits={k:v for k,v in response.headers.items() if 'ratelimit' in k.lower() or 'retry-after' in k.lower()}
             buffer=''
             while True:
                 # read1/readline avoids urllib buffering a large chunk before emitting SSE tokens.
+                if cancel_event is not None and cancel_event.is_set():
+                    raise CancelledError('Operasi dibatalkan oleh pengguna.')
                 chunk=response.read1(4096) if hasattr(response, 'read1') else response.readline()
                 if not chunk: break
                 buffer += chunk.decode('utf-8','replace')
