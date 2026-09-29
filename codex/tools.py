@@ -71,11 +71,22 @@ def read_file(ws: Workspace, path: str, start_line: int | None = None, end_line:
         )
     return content
 
-def write_file(ws: Workspace, path: str, content: str) -> str:
+def write_file(ws: Workspace, path: str, content: str) -> dict[str, Any]:
     p = ws.path(path)
     p.parent.mkdir(parents=True, exist_ok=True)
     p.write_text(content, encoding="utf-8")
-    return f"wrote {path} ({len(content.encode())} bytes)"
+    return {
+        "saved": True,
+        "path": str(Path(path)),
+        "absolute_path": str(p),
+        "bytes": len(content.encode("utf-8")),
+        "content": content,
+    }
+
+def make_directory(ws: Workspace, path: str) -> dict[str, Any]:
+    p = ws.path(path)
+    p.mkdir(parents=True, exist_ok=True)
+    return {"created": True, "type": "directory", "path": str(Path(path)), "absolute_path": str(p)}
 
 def edit_file(ws: Workspace, path: str, old: str, new: str, count: int | None = None) -> str:
     p = ws.path(path)
@@ -91,7 +102,7 @@ def edit_file(ws: Workspace, path: str, old: str, new: str, count: int | None = 
         raise ToolError(f"count harus 1..{occurrences}.")
     updated = content.replace(old, new, count)
     p.write_text(updated, encoding="utf-8")
-    return f"edited {path}; replacements={count}"
+    return {"saved": True, "path": str(Path(path)), "absolute_path": str(p), "replacements": count, "content": updated}
 
 def apply_patch(ws: Workspace, path: str, diff_text: str) -> str:
     p = ws.path(path)
@@ -121,7 +132,8 @@ def apply_patch(ws: Workspace, path: str, diff_text: str) -> str:
                 timeout=30,
             )
             if proc.returncode == 0:
-                return f"patched {path}"
+                updated = p.read_text(encoding="utf-8") if p.exists() else ""
+                return {"saved": True, "path": str(Path(path)), "absolute_path": str(p), "content": updated}
             raise ToolError(proc.stderr.strip() or proc.stdout.strip() or "patch gagal")
         finally:
             try:
@@ -319,7 +331,8 @@ class ToolRegistry:
     def specs(self) -> list[dict[str, Any]]:
         return [
             {"name":"read","description":"Read a workspace file; supports optional line range.","parameters":{"path":"string","start_line":"integer|null","end_line":"integer|null"}},
-            {"name":"write","description":"Create or overwrite a workspace file.","parameters":{"path":"string","content":"string"}},
+            {"name":"write","description":"Create or overwrite a workspace file. Parent folders are created automatically. Use this for actual file creation, not just showing code.","parameters":{"path":"string","content":"string"}},
+            {"name":"mkdir","description":"Create a workspace folder and any missing parent folders.","parameters":{"path":"string"}},
             {"name":"delete","description":"Delete a file or directory at an explicit path. Use confirmed=true only when the user explicitly requested deletion; recursive=true is required for non-empty directories.","parameters":{"path":"string","recursive":"boolean","confirmed":"boolean"}},
             {"name":"edit","description":"Replace exact text in a workspace file.","parameters":{"path":"string","old":"string","new":"string","count":"integer|null"}},
             {"name":"patch","description":"Apply a unified diff to a workspace file.","parameters":{"path":"string","diff":"string"}},
@@ -346,6 +359,7 @@ class ToolRegistry:
     def call(self, name: str, args: dict[str, Any], subagent: Callable[[str, str], str] | None = None) -> Any:
         if name == "read": return read_file(self.ws, args["path"], args.get("start_line"), args.get("end_line"))
         if name == "write": return write_file(self.ws, args["path"], args["content"])
+        if name == "mkdir": return make_directory(self.ws, args["path"])
         if name == "delete": return delete_path(args["path"], bool(args.get("recursive", False)), bool(args.get("confirmed", False)))
         if name == "edit": return edit_file(self.ws, args["path"], args["old"], args["new"], args.get("count"))
         if name == "patch": return apply_patch(self.ws, args["path"], args["diff"])

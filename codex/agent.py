@@ -94,6 +94,20 @@ PROJECT KNOWLEDGE
 
 TOOLS
 32. Use tools whenever they materially help complete the task.
+
+TOOL MASTERY / CODING INTELLIGENCE
+- Treat the toolset as your hands: inspect with project_scan/list/glob/grep/read, reason from the returned evidence, then act with write/edit/patch/mkdir/bash.
+- For coding tasks, do not stop at code generation. Inspect -> choose the smallest tool -> execute -> inspect the result -> verify -> summarize.
+- Use read before edit/patch when exact existing content matters. Use write for a complete new file. Use mkdir for an intentional empty directory. Parent folders are created automatically by write.
+- Use bash for commands that genuinely need a shell: package managers, builds, tests, formatters, git commands not covered by git, file metadata, and environment checks. Do not replace simple file operations with bash.
+- Use grep/glob/list to discover rather than guessing paths. Use project_scan when the repository structure is not already clear.
+- Use websearch when the answer depends on current/external information, library/API documentation, version-specific behavior, or an unfamiliar error; then use webfetch on the most relevant primary documentation when possible.
+- Read search results critically: distinguish documentation from forum guesses, prefer primary sources, and do not invent facts not present in the retrieved material.
+- Understand natural-language requests by extracting objective, target files, constraints, expected behavior, and acceptance criteria before acting. Preserve the user's intended meaning rather than matching isolated keywords.
+- When a request mentions a folder/project/repository, analyze the actual existing workspace. Never clone a project merely to understand it unless the user explicitly asks for cloning.
+- When creating or changing code, keep the actual filesystem as the source of truth. A code block in your final answer is not a substitute for write/edit/patch.
+- If you create a file, make sure it is physically saved before saying it exists. If you create a folder, make sure it exists before reporting it.
+- After a write/edit/patch, use the returned saved content/path and verify when appropriate.
 32. Use read for inspection, write for new/complete content, edit for exact replacements, patch for unified diffs, grep/glob/list for discovery, bash for terminal work, webfetch/websearch for external information, todo for task tracking, task/background for delegation, lsp for language-server analysis, project_scan for project intelligence, memory for persistent context, git for repository inspection, checkpoint for rollback points, and doctor for environment diagnosis.
 33. Check arguments carefully before every tool call.
 34. Use actual tool output as the source of truth for what happened.
@@ -317,8 +331,27 @@ class Agent:
         last: Exception | None = None
         for attempt in range(attempts):
             try:
-                callback = self.stream_callback if self.native_tools else None
+                callback = self.stream_callback if self.config.stream else None
                 if self.config.stream:
+                    if not self.native_tools and callback:
+                        # Strict-JSON fallback can stream a tool-call object. Buffer only the
+                        # small prefix needed to distinguish JSON tool protocol from normal prose.
+                        probe=[]; decided=False
+                        def fallback_stream(piece):
+                            nonlocal decided
+                            if decided:
+                                callback(piece); return
+                            probe.append(piece)
+                            joined=''.join(probe)
+                            stripped=joined.lstrip()
+                            if stripped.startswith('{') and len(stripped) < 240 and ('"tool"' in stripped or '"args"' in stripped or stripped.endswith('}')):
+                                return
+                            if stripped.startswith('{') and len(stripped) >= 240:
+                                return
+                            decided=True
+                            callback(joined)
+                        result=stream_json(self.config.endpoint, self.config.api_key, payload, timeout=120, on_token=fallback_stream)
+                        return result
                     return stream_json(self.config.endpoint, self.config.api_key, payload, timeout=120, on_token=callback)
                 return post_json(self.config.endpoint, self.config.api_key, payload)
             except APIError as exc:
@@ -435,9 +468,16 @@ class Agent:
             return {"error":"Pemulihan checkpoint mengganti file proyek. Konfirmasi eksplisit diperlukan.","confirmation":f"CONFIRM CHECKPOINT {args.get('name','')}"}
         try:
             result = self.registry.call(name, args, self._subagent)
+            if name in {"write", "edit", "patch", "mkdir", "delete"}:
+                try:
+                    self.registry.project.scan()
+                except Exception:
+                    pass
             if self.event_callback:
                 try:
                     self.event_callback("tool_done", name, result)
+                    if name in {"write", "edit", "patch", "mkdir"} and isinstance(result, dict):
+                        self.event_callback("file_saved", result.get("path", args.get("path", "")), result)
                 except Exception:
                     pass
             return result
@@ -481,6 +521,41 @@ class Agent:
                 "provider restrictions, OS permissions, or destructive-operation confirmation."
             ),
         })
+
+    def _auto_save_explicit_artifacts(self, text: str) -> list[dict[str, str]]:
+        """Safety-bounded fallback: save only artifacts explicitly labeled as files in the model response.
+
+        Normal behavior is still to use the write/mkdir tools. This catches a model that emitted
+        `FILE: path` plus a fenced code block but forgot to call write. Existing files are never
+        overwritten by this fallback.
+        """
+        if not text or not hasattr(self.registry, 'ws'):
+            return []
+        blocks = re.findall(r'(?ms)^[ \t]{0,8}```[^\n]*\n(.*?)^[ \t]{0,8}```[ \t]*$', text)
+        if not blocks:
+            return []
+        labels = list(re.finditer(r'(?im)^\s*(?:FILE|PATH|FILE PATH)\s*[:=]\s*([^\n`]+?)\s*$', text))
+        if not labels:
+            # Secondary fallback for natural-language artifact announcements such as
+            # "Saya membuat file contoh.kt" followed by a code block.
+            labels = list(re.finditer(r'(?im)\b(?:membuat|buat|create|creating|write|menulis|simpan|save)\s+(?:kan\s+)?file\s+[`\"]?([^\s`\"\n]+)', text))
+        saved=[]
+        for i,m in enumerate(labels):
+            if i >= len(blocks): break
+            raw=m.group(1).strip().strip('`').strip()
+            if not raw or raw.startswith('/') or raw.startswith('~'):
+                # Workspace tools intentionally keep writes inside the workspace.
+                continue
+            try:
+                path=self.registry.ws.path(raw)
+                if path.exists():
+                    continue
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text(blocks[i], encoding='utf-8')
+                saved.append({'path':raw,'absolute_path':str(path)})
+            except Exception:
+                continue
+        return saved
 
     def run_once(self) -> str:
         for _ in range(self.max_steps):
@@ -532,6 +607,13 @@ class Agent:
                     self.execution_reminders += 1
                     self._execution_reminder(current_request)
                     continue
+                artifacts = self._auto_save_explicit_artifacts(response_text)
+                if artifacts:
+                    self.messages.append({"role": "system", "content": "AUTO-SAVED EXPLICIT ARTIFACTS: " + json.dumps(artifacts, ensure_ascii=False)})
+                    if self.event_callback:
+                        for artifact in artifacts:
+                            try: self.event_callback("file_saved", artifact.get("path", ""), artifact)
+                            except Exception: pass
                 self.messages.append({"role": "assistant", "content": response_text})
                 return response_text
 
@@ -568,6 +650,17 @@ class Agent:
             command = user_text[len("CONFIRM "):].strip()
             result = self.registry.call("bash", {"command": command, "cwd": "."})
             return json.dumps(result, ensure_ascii=False)
+        # Refresh the real workspace model for coding/project requests. This analyzes the
+        # existing folder in place; it never clones the repository.
+        if self._is_actionable_request(user_text):
+            try:
+                self.registry.project.scan()
+                if self.event_callback:
+                    self.event_callback("tool_start", "project_scan", {"path": str(self.registry.ws.root)})
+                    self.event_callback("tool_done", "project_scan", self.registry.project.data)
+                self.project_context = self.registry.project.compact_context()
+            except Exception:
+                pass
         memory_context = self.registry.memory.context(user_text, 6)
         goal_context = (
             "CURRENT USER REQUEST / GOAL:\n" + user_text +

@@ -13,6 +13,8 @@ from .project import ProjectIndex
 from .renderer import render_markdown, LiveMarkdownRenderer, extract_code_blocks
 
 RED = "\033[91m"
+GREEN = "\033[92m"
+WHITE = "\033[97m"
 CYAN = "\033[96m"
 DIM = "\033[2m"
 RESET = "\033[0m"
@@ -170,15 +172,16 @@ def choose_workspace() -> str:
         return candidate
 
 def banner(config: Config):
-    BLACK='\033[40m'; REDB='\033[91m'
-    print(REDB + BLACK + r"""
-     ██╗ █████╗  ██████╗██╗  ██╗
-     ██║██╔══██╗██╔════╝██║ ██╔╝
-     ██║███████║██║     █████╔╝ 
-██   ██║██╔══██║██║     ██╔═██╗ 
-╚█████╔╝██║  ██║╚██████╗██║  ██╗
- ╚════╝ ╚═╝  ╚═╝ ╚═════╝╚═╝  ╚═╝
-""" + RESET)
+    BLACK='\033[40m'; GREENB='\033[92m'; WHITEB='\033[97m'
+    # androidPE: green + black + white terminal identity.
+    print(BLACK + GREENB + r"""
+     █████╗ ███╗   ██╗██████╗ ██████╗  ██████╗ ██╗██████╗ ███████╗
+    ██╔══██╗████╗  ██║██╔══██╗██╔══██╗██╔═══██╗██║██╔══██╗██╔════╝
+    ███████║██╔██╗ ██║██║  ██║██████╔╝██║   ██║██║██║  ██║█████╗  
+    ██╔══██║██║╚██╗██║██║  ██║██╔═══╝ ██║   ██║██║██║  ██║██╔══╝  
+    ██║  ██║██║ ╚████║██████╔╝██║     ╚██████╔╝██║██████╔╝███████╗
+    ╚═╝  ╚═╝╚═╝  ╚═══╝╚═════╝ ╚═╝      ╚═════╝ ╚═╝╚═════╝ ╚══════╝
+""" + WHITEB + "androidPE" + GREENB + " · coding agent" + RESET)
     cols=min(shutil.get_terminal_size((80,24)).columns,100)
     print("\n"+"─"*cols+"\n")
 
@@ -226,7 +229,7 @@ def run_ui(agent, config, registry):
     last_answer = ""
     while True:
         try:
-            text = input(f"{RED}root@codex:~#{RESET} ").strip()
+            text = input(f"{RED}root@androidPE:~#{RESET} ").strip()
         except (EOFError, KeyboardInterrupt):
             restore_terminal()
             clear()
@@ -275,8 +278,8 @@ def run_ui(agent, config, registry):
             print(_change_workspace(agent, config, registry, target) + "\n")
             continue
         try:
-            print(f"{CYAN}root@ai-codex:~#{RESET}")
-            print(f"{DIM}⠿ Jack sedang berpikir...{RESET}", flush=True)
+            print(f"{CYAN}root@ai-androidPE:~#{RESET}")
+            print(f"{DIM}⠿ androidPE sedang bekerja...{RESET}", flush=True)
 
             class _LiveAnswer:
                 def __init__(self):
@@ -334,11 +337,45 @@ def run_ui(agent, config, registry):
                 streamed.append(piece)
                 live.token(piece)
             def on_event(kind, name, data):
+                import json as _json
                 labels={
-                    "tool_start":"Menjalankan", "tool_done":"Selesai", "tool_error":"Gagal"
+                    "tool_start":"Menjalankan", "tool_done":"Selesai", "tool_error":"Gagal", "file_saved":"Tersimpan"
                 }
                 label=labels.get(kind, kind)
-                print(f"\r\033[2K{DIM}↳ {label}: {name}{RESET}", flush=True)
+                pretty={
+                    "read":"Read", "write":"Write", "edit":"Edit", "patch":"Patch", "bash":"Bash",
+                    "grep":"Grep", "glob":"Glob", "list":"List", "mkdir":"Mkdir", "delete":"Delete",
+                    "websearch":"WebSearch", "webfetch":"WebFetch", "project_scan":"Project Scan",
+                    "lsp":"LSP", "git":"Git", "verify":"Verify", "checkpoint":"Checkpoint",
+                    "memory":"Memory", "todo":"Todo", "task":"Task", "background":"Background", "doctor":"Doctor",
+                    "diff":"Diff", "goal":"Goal"
+                }
+                tool_label=pretty.get(name, name)
+                detail=""
+                if kind == "tool_start" and isinstance(data, dict):
+                    if name == "bash": detail = " · " + str(data.get("command", ""))
+                    elif data.get("path"): detail = " · " + str(data.get("path"))
+                    elif name in {"websearch"}: detail = " · " + str(data.get("query", ""))
+                    elif name in {"webfetch"}: detail = " · " + str(data.get("url", ""))
+                print(f"\r\033[2K{DIM}↳ {label}: {tool_label}{detail}{RESET}", flush=True)
+                if kind == "file_saved" and isinstance(data, dict):
+                    path=data.get("absolute_path") or data.get("path") or name
+                    if data.get("type") == "directory":
+                        print(f"{GREEN}  📁 {path}{RESET}", flush=True)
+                        return
+                    print(f"{GREEN}  📄 {path}{RESET}", flush=True)
+                    content=data.get("content")
+                    if isinstance(content, str) and content:
+                        print(render_markdown("```text\n" + content + "\n```") , flush=True)
+                if kind == "tool_done" and name in {"write","edit","patch","mkdir"} and isinstance(data, dict):
+                    # Show a real progress bar for filesystem persistence.
+                    if data.get("saved") or data.get("created"):
+                        width=45
+                        for pct in (20, 45, 70, 93, 100):
+                            filled=int(width*pct/100)
+                            print(f"{GREEN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━{RESET}", flush=True)
+                            print(f"{GREEN}  {'█'*filled}{'░'*(width-filled)} {pct:3d}%{RESET}", flush=True)
+                            print(f"{GREEN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━{RESET}", flush=True)
             agent.stream_callback = on_token
             agent.event_callback = on_event
             try:

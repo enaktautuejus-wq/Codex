@@ -16,34 +16,67 @@ class ProjectIndex:
         self.project_id=hashlib.sha256(str(self.root).encode()).hexdigest()[:20]
         self.cache_path=home/"projects"/self.project_id/"index.json"
     def scan(self)->dict:
-        files=dirs=0; sizes=0; langs=Counter(); configs=[]; samples=[]
+        """Analyze the existing workspace in-place; never clone or modify the project."""
+        files=dirs=0; sizes=0; langs=Counter(); configs=[]; samples=[]; entrypoints=[]; tree=[]
+        config_names={
+            'package.json','pyproject.toml','requirements.txt','pom.xml','build.gradle','settings.gradle',
+            'settings.gradle.kts','build.gradle.kts','cargo.toml','go.mod','composer.json','pubspec.yaml',
+            'dockerfile','makefile','cmakelists.txt','vite.config.js','vite.config.ts','tsconfig.json'
+        }
+        entry_names={
+            'main.py','app.py','server.py','manage.py','index.js','index.ts','main.js','main.ts','main.kt',
+            'application.kt','main.java','main.go','main.rs','main.dart','main.cpp','main.c','index.html'
+        }
         for base, dnames, fnames in os.walk(self.root):
             dnames[:] = [d for d in dnames if d not in SKIP and not d.startswith('.')]
-            dirs += len(dnames)
             relbase=Path(base).relative_to(self.root)
-            for name in fnames:
+            if str(relbase) != '.': tree.append(str(relbase) + '/')
+            dirs += len(dnames)
+            for name in sorted(fnames):
                 p=Path(base)/name; files+=1
                 try: sizes+=p.stat().st_size
-                except OSError: pass
-                if name in SECRET_NAMES or any(x in name.lower() for x in ('password','credential','token','secret')): continue
+                except OSError: continue
+                rel=str(p.relative_to(self.root))
+                if len(tree)<240: tree.append(rel)
+                low=name.lower()
+                if name in SECRET_NAMES or any(x in low for x in ('password','credential','token','secret')): continue
                 lang=LANG.get(p.suffix.lower())
                 if lang: langs[lang]+=1
-                if name.lower() in {'package.json','pyproject.toml','requirements.txt','pom.xml','build.gradle','settings.gradle','settings.gradle.kts','build.gradle.kts','cargo.toml','go.mod','composer.json','pubspec.yaml','dockerfile'}: configs.append(str(p.relative_to(self.root)))
-            if len(samples)<10 and fnames:
-                for name in fnames:
-                    p=Path(base)/name
-                    if p.name in SECRET_NAMES: continue
-                    if p.suffix.lower() in LANG and p.stat().st_size<12000:
-                        try:
-                            text=p.read_text(encoding='utf-8')[:1200]
-                            samples.append({'path':str(p.relative_to(self.root)),'content':text})
-                        except Exception: pass
-        self.data={'root':str(self.root),'files':files,'directories':dirs,'bytes':sizes,'languages':dict(langs),'configs':configs[:80],'samples':samples[:10]}
+                if low in config_names: configs.append(rel)
+                if low in entry_names or low.startswith('main.') or low.startswith('index.'):
+                    entrypoints.append(rel)
+                if len(samples)<18 and p.suffix.lower() in LANG and p.stat().st_size<16000:
+                    try:
+                        text=p.read_text(encoding='utf-8')[:1800]
+                        samples.append({'path':rel,'content':text})
+                    except Exception: pass
+        # Prefer human/project intent files and actual entrypoints in the context.
+        priority=[]
+        for rel in ['README.md','README','AGENTS.md','CONTRIBUTING.md','package.json','pyproject.toml','build.gradle','settings.gradle','build.gradle.kts','settings.gradle.kts','Cargo.toml','go.mod','pubspec.yaml']:
+            if (self.root/rel).is_file(): priority.append(rel)
+        priority += entrypoints[:20]
+        for sample in samples: priority.append(sample['path'])
+        seen=set(); key_files=[]
+        for rel in priority:
+            if rel not in seen and (self.root/rel).is_file():
+                seen.add(rel); key_files.append(rel)
+        key_contents=[]
+        for rel in key_files[:14]:
+            try:
+                text=(self.root/rel).read_text(encoding='utf-8')
+                if len(text)>4200: text=text[:4200]+'\n...[truncated]...'
+                key_contents.append({'path':rel,'content':text})
+            except Exception: pass
+        self.data={
+            'root':str(self.root),'files':files,'directories':dirs,'bytes':sizes,
+            'languages':dict(langs),'configs':configs[:80],'entrypoints':entrypoints[:40],
+            'tree':tree[:240],'samples':samples[:18],'key_files':key_contents,
+            'analysis_note':'Existing workspace analyzed directly; no clone/copy was performed.'
+        }
         try:
             self.cache_path.parent.mkdir(parents=True, exist_ok=True)
             self.cache_path.write_text(json.dumps(self.data, ensure_ascii=False), encoding='utf-8')
-        except OSError:
-            pass
+        except OSError: pass
         return self.data
 
     def relevant_context(self, query: str, limit: int = 6) -> str:
@@ -68,10 +101,11 @@ class ProjectIndex:
     def compact_context(self)->str:
         if not self.data: self.scan()
         d=self.data
-        lines=[f"Workspace: {d['root']}",f"Files: {d['files']}; directories: {d['directories']}; bytes: {d['bytes']}","Languages: "+(', '.join(f"{k}={v}" for k,v in sorted(d['languages'].items())) or 'none')]
+        lines=[f"Workspace: {d['root']}",f"Files: {d['files']}; directories: {d['directories']}; bytes: {d['bytes']}","Languages: "+(', '.join(f"{k}={v}" for k,v in sorted(d['languages'].items())) or 'none'),d.get('analysis_note','')]
         if d['configs']: lines.append('Build/config files: '+', '.join(d['configs'][:30]))
-        if d['samples']:
-            lines.append('Representative files: '+', '.join(x['path'] for x in d['samples']))
+        if d.get('entrypoints'): lines.append('Likely entrypoints: '+', '.join(d['entrypoints'][:25]))
+        if d.get('tree'): lines.append('Project tree (existing workspace):\n'+'\n'.join(d['tree'][:140]))
+        if d['samples']: lines.append('Representative files: '+', '.join(x['path'] for x in d['samples']))
         # Give the model useful project knowledge, not only filenames. Keep it bounded
         # and prioritize documentation/config/entrypoints while avoiding secrets.
         priority = []

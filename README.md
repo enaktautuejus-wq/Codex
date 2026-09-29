@@ -10,8 +10,19 @@ pkg install python git ripgrep
 termux-setup-storage
 git clone <your-repository>.git
 cd Codex
-python codex.py
+./install.sh
+codex
 ```
+
+## Command `codex`
+
+Setelah `./install.sh`, androidPE dapat dijalankan langsung dengan:
+
+```bash
+codex
+```
+
+Launcher memasang command ke `$PREFIX/bin/codex` dan menunjuk ke `codex.py` di folder instalasi. Jika repository dipindahkan setelah instalasi, jalankan ulang `./install.sh`. Untuk debugging, `python codex.py` tetap didukung.
 
 ## Startup
 
@@ -112,3 +123,14 @@ Markdown fenced blocks are rendered as terminal code panels with language detect
 - Runtime telemetry reports request count, provider-reported token usage, latency, and rate-limit headers when available.
 - Context/output limits are not hard-coded by Codex; provider/model limits and provider errors drive compaction/retry behavior.
 - Verification is task-aware and is not forced for non-build/non-test work.
+## androidPE LIVE coding upgrades
+
+- Identitas CLI: **androidPE** dengan prompt `root@androidPE:~#` dan `root@ai-androidPE:~#`.
+- Tool activity menampilkan tool nyata yang digunakan (Read, Write, Edit, Patch, Bash, WebSearch, Project Scan, Verify, dan lainnya) beserta target/command yang relevan.
+- File write/edit/patch langsung disimpan ke filesystem; `write` otomatis membuat parent folder. Ada juga tool `mkdir` untuk folder eksplisit.
+- Setelah file dibuat/diubah, terminal dapat menampilkan path absolut dan isi file aktual dari filesystem.
+- Project analysis membaca workspace yang dipilih secara langsung: tree, bahasa, config, entrypoint, README/dokumen penting, dan sampel file. Tidak melakukan clone otomatis.
+- Mode coding anti-slop diperkuat: inspect → act → verify → report, dengan web search/fetch untuk dokumentasi eksternal saat diperlukan.
+- Streaming tetap bertahap untuk teks; code fence dijaga agar tidak rusak saat chunk SSE terpotong.
+- Jika model hanya mengeluarkan artifact yang secara eksplisit ditandai `FILE:`/`PATH:` atau menyatakan membuat file dan menyertakan code block, ada fallback save terbatas untuk file yang belum ada. Existing file tidak ditimpa oleh fallback tersebut.
+
